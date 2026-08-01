@@ -87,11 +87,13 @@
   /* ---------- centre ---------- */
   .modebar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
   .subbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--dim);min-height:30px}
-  #vizwrap,#bn_vizwrap,#bn_distwrap{overflow-x:auto}
+  #vizwrap,#bn_vizwrap,#bn_distwrap,#bn_focuswrap{overflow-x:auto}
   #vizwrap{margin-top:6px}
   #bn_distwrap{margin-top:4px}
   #viz,#bn_viz{display:block;cursor:crosshair}
-  #bn_dist{display:block}
+  #bn_dist,#bn_focus{display:block}
+  #bn_focuswrap{margin:2px 0 4px}
+  .legend b{font-family:ui-monospace,Menlo,monospace}
   .stepbar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:9px;
            border-top:1px solid var(--line);font-size:12px}
   .stepbar button{padding:4px 9px}

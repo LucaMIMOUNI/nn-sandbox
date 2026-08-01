@@ -200,13 +200,17 @@
   <div class="col-mid">
     <div class="panel">
       <div id="bn_vizwrap"><canvas id="bn_viz"></canvas></div>
-      <div id="bn_readout"></div>
       <div class="legend">
-        <span><span class="sw" style="background:var(--accent2)"></span>positive</span>
-        <span><span class="sw" style="background:var(--accent)"></span>negative</span>
+        <span><span class="sw" style="background:var(--accent2)"></span><b class="N">n</b> = one sample, in its own box</span>
+        <span><span class="sw" style="background:var(--accent)"></span><b class="C">c</b> = one channel, merely a gap apart</span>
         <span><span class="sw" style="background:var(--panel2);border:1px solid var(--line);opacity:.6"></span>greyed = pooled into a different mean</span>
-        <span>colour scale is shared inside each tensor</span>
       </div>
+    </div>
+    <div class="panel">
+      <h2>This value, step by step</h2>
+      <div id="bn_focuswrap"><canvas id="bn_focus"></canvas></div>
+      <div class="note" id="bn_focusnote"></div>
+      <div id="bn_readout"></div>
     </div>
     <div class="panel">
       <h2>Every value on one axis — before and after</h2>

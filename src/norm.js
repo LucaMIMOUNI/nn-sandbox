@@ -26,7 +26,7 @@ const DIMS = [
 const el = id => document.getElementById("bn_" + id);
 const eps = () => Math.pow(10, S.epsExp);
 
-let X = null, Y = null;          // Float32Array N*C*H*W
+let X = null, XH = null, Y = null;   // Float32Array N*C*H*W — raw, normalised, after affine
 let MU = null, VA = null;        // per (n,c): the statistic actually used
 let GRP = [], GID = null;        // pooling groups, and (n,c) -> group index
 let RM = null, RV = null;        // running_mean, running_var
@@ -128,7 +128,8 @@ function buildGroups(){
 /* ============================== the maths ============================== */
 function normalise(){
   const {N,C,H,Wd} = S;
-  Y = new Float32Array(N*C*H*Wd);
+  Y  = new Float32Array(N*C*H*Wd);
+  XH = new Float32Array(N*C*H*Wd);
   MU = new Float32Array(N*C); VA = new Float32Array(N*C);
   const frozen = S.norm === "batch" && S.mode === "eval";
   for(let n=0;n<N;n++) for(let c=0;c<C;c++){
@@ -139,7 +140,8 @@ function normalise(){
     const inv = 1/Math.sqrt(va + eps());
     for(let h=0;h<H;h++) for(let w=0;w<Wd;w++){
       const i = idx(n,c,h,w);
-      Y[i] = GAM[c]*(X[i] - mu)*inv + BET[c];
+      XH[i] = (X[i] - mu)*inv;                // normalised, before the affine step
+      Y[i]  = GAM[c]*XH[i] + BET[c];
     }
   }
 }
@@ -170,6 +172,9 @@ function palette(){
     dim:   d ? "#8b949e" : "#57606a",
     dim2:  d ? "#6e7681" : "#8c959f",
     panel: d ? "#161b22" : "#ffffff",
+    frame: d ? "#12171e" : "#f7f9fb",
+    frameLine: d ? "#303a47" : "#cbd5df",
+    violet:d ? "#d2a8ff" : "#8250df",
     veil:  d ? "rgba(22,27,34,.80)" : "rgba(255,255,255,.80)",
     pos:   d ? [240,161,50]  : [188,108,0],
     neg:   d ? [74,163,255]  : [9,105,218],
@@ -198,83 +203,118 @@ function fitCanvas(cv, w, h){
   return g;
 }
 
-const HEAD = 17, TOPLBL = 13, GUT = 24;
+const HEAD = 17, TOPLBL = 14, GUT = 40, FPAD = 5;
 
+function roundRect(g, x, y, w, h, r){
+  r = Math.min(r, w/2, h/2);
+  g.beginPath();
+  g.moveTo(x+r, y);
+  g.arcTo(x+w, y, x+w, y+h, r);
+  g.arcTo(x+w, y+h, x, y+h, r);
+  g.arcTo(x, y+h, x, y, r);
+  g.arcTo(x, y, x+w, y, r);
+  g.closePath();
+}
+
+/* ---------- layout ----------
+   One tensor, not two. Each **sample** gets a box of its own; the **channels**
+   inside it only get a gap. That asymmetry is the whole picture: which numbers
+   live in the same sample, versus which merely live in the same channel across
+   different samples. Getting those two confused is what makes BatchNorm hard.
+   ---------------------------------------------------------------------- */
 function layout(){
   const avail = Math.max(360, (el("vizwrap").clientWidth || 900) - 2);
   const {N,C,H,Wd} = S;
   let best = null;
-  for(const side of [true,false]){
-    for(let cs=34; cs>=3; cs--){
-      const g  = Math.max(3, Math.round(cs*0.4));
-      const tw = GUT + C*Wd*cs + (C-1)*g;
-      const th = HEAD + TOPLBL + N*H*cs + (N-1)*g;
-      const w  = side ? tw*2 + 54 : tw;
-      if(w <= avail){ best = {cs, g, tw, th, side}; break; }
-    }
-    if(best) break;
+  for(let cs=34; cs>=3; cs--){
+    const gc = Math.max(2, Math.round(cs*0.34));          // between channels — small
+    const gn = Math.max(10, Math.round(cs*0.8));          // between samples  — large
+    const fw = 2*FPAD + C*Wd*cs + (C-1)*gc;
+    if(GUT + fw <= avail){ best = {cs, gc, gn, fw, fh: 2*FPAD + H*cs}; break; }
   }
   if(!best){
-    const cs = 3, g = 3;
-    best = {cs, g, tw: GUT + C*Wd*cs + (C-1)*g, th: HEAD + TOPLBL + N*H*cs + (N-1)*g, side:false};
+    const cs = 3, gc = 2;
+    best = {cs, gc, gn:10, fw: 2*FPAD + C*Wd*cs + (C-1)*gc, fh: 2*FPAD + H*cs};
   }
-  best.ax = 0; best.ay = 0;
-  best.bx = best.side ? best.tw + 54 : 0;
-  best.by = best.side ? 0 : best.th + 26;
+  best.w = Math.max(GUT + best.fw, 200);   // never clip the title on a tiny tensor
+  best.h = HEAD + TOPLBL + N*best.fh + (N-1)*best.gn;
   L = best;
-  L.w = best.side ? best.tw*2 + 54 : best.tw;
-  L.h = best.side ? best.th : best.th*2 + 26;
+}
+const frameXY = n => ({x: GUT, y: HEAD + TOPLBL + n*(L.fh + L.gn)});
+function blockXY(n, c){
+  const f = frameXY(n);
+  return {x: f.x + FPAD + c*(S.Wd*L.cs + L.gc), y: f.y + FPAD};
 }
 
-function blockXY(ox, oy, n, c){
-  return {x: ox + GUT + c*(S.Wd*L.cs + L.g), y: oy + HEAD + TOPLBL + n*(S.H*L.cs + L.g)};
-}
-
-function drawTensor(g, T, ox, oy, title, max, P, live){
+function drawX(g, P, live){
   const {N,C,H,Wd} = S, cs = L.cs;
-  g.fillStyle = P.dim; g.font = "600 11px ui-sans-serif,system-ui";
-  g.textAlign = "left"; g.textBaseline = "alphabetic";
-  g.fillText(title, ox, oy + 11);
+  let max = 0;
+  for(let i=0;i<X.length;i++) max = Math.max(max, Math.abs(X[i]));
 
-  g.font = "10px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim2;
+  g.textAlign = "left"; g.textBaseline = "alphabetic";
+  g.fillStyle = P.dim; g.font = "600 11px ui-sans-serif,system-ui";
+  g.fillText(`x — input (${N}, ${C}, ${H}, ${Wd})`, 0, 11);
+
+  g.font = "600 10px ui-monospace,Menlo,monospace";           // the channel ruler
   for(let c=0;c<C;c++){
-    const b = blockXY(ox, oy, 0, c);
-    if(Wd*cs > 14) g.fillText("c"+c, b.x, oy + HEAD + TOPLBL - 3);
+    const b = blockXY(0, c);
+    if(Wd*cs > 14){
+      const on = !live || Array.from({length:N}, (_,n) => nc(n,c)).some(k => live.has(k));
+      g.fillStyle = on ? P.accent : P.dim2;
+      g.globalAlpha = on ? 1 : .5;
+      g.fillText("c"+c, b.x, HEAD + TOPLBL - 5);
+      g.globalAlpha = 1;
+    }
   }
-  g.textAlign = "right";
-  for(let n=0;n<N;n++){
-    const b = blockXY(ox, oy, n, 0);
-    if(H*cs > 11) g.fillText("n"+n, ox + GUT - 5, b.y + H*cs/2 + 3);
-  }
-  g.textAlign = "center"; g.textBaseline = "middle";
 
   const showNums = cs >= 17;
-  for(let n=0;n<N;n++) for(let c=0;c<C;c++){
-    const b = blockXY(ox, oy, n, c);
-    const on = !live || live.has(nc(n,c));
-    for(let h=0;h<H;h++) for(let w=0;w<Wd;w++){
-      const v = T[idx(n,c,h,w)];
-      const x = b.x + w*cs, y = b.y + h*cs;
-      g.fillStyle = P.panel; g.fillRect(x, y, cs, cs);
-      g.fillStyle = tint(v, max, P);
-      g.globalAlpha = on ? 1 : 0.16;
-      g.fillRect(x, y, cs, cs);
-      g.globalAlpha = 1;
-      if(showNums){
-        const txt = fmt(v, 1);
-        g.fillStyle = on ? P.text : P.dim2;
-        g.globalAlpha = on ? 1 : 0.45;
-        g.font = `600 ${Math.min(11, Math.max(6, Math.floor(cs*0.95/Math.max(txt.length, 1.7))))}px ui-monospace,Menlo,monospace`;
-        g.fillText(txt, x + cs/2, y + cs/2 + 0.5);
-        g.globalAlpha = 1;
-      }
-    }
-    g.strokeStyle = on ? P.accent : P.line;
-    g.lineWidth = on ? 1.6 : 1;
-    g.globalAlpha = on ? 1 : 0.5;
-    g.strokeRect(b.x - .5, b.y - .5, Wd*cs + 1, H*cs + 1);
+  for(let n=0;n<N;n++){
+    const f = frameXY(n);
+    const anyLive = !live || Array.from({length:C}, (_,c) => nc(n,c)).some(k => live.has(k));
+
+    // the sample container — the batch dimension, made a physical object
+    g.globalAlpha = anyLive ? 1 : .5;
+    g.fillStyle = P.frame;
+    roundRect(g, f.x, f.y, L.fw, L.fh, 7); g.fill();
+    g.strokeStyle = anyLive ? P.frameLine : P.line; g.lineWidth = 1; g.stroke();
+    g.fillStyle = P.amber;                                    // batch-coloured spine
+    roundRect(g, f.x, f.y + 2, 3, L.fh - 4, 1.5); g.fill();
     g.globalAlpha = 1;
+
+    g.textAlign = "right"; g.textBaseline = "middle";
+    g.font = "600 11px ui-monospace,Menlo,monospace";
+    g.fillStyle = anyLive ? P.amber : P.dim2;
+    g.fillText("n"+n, f.x - 8, f.y + L.fh/2);
+    g.textAlign = "center";
+
+    for(let c=0;c<C;c++){
+      const b = blockXY(n, c);
+      const on = !live || live.has(nc(n,c));
+      for(let h=0;h<H;h++) for(let w=0;w<Wd;w++){
+        const v = X[idx(n,c,h,w)];
+        const x = b.x + w*cs, y = b.y + h*cs;
+        g.fillStyle = P.panel; g.fillRect(x, y, cs, cs);
+        g.fillStyle = tint(v, max, P);
+        g.globalAlpha = on ? 1 : 0.14;
+        g.fillRect(x, y, cs, cs);
+        g.globalAlpha = 1;
+        if(showNums){
+          const txt = fmt(v, 1);
+          g.fillStyle = on ? P.text : P.dim2;
+          g.globalAlpha = on ? 1 : 0.4;
+          g.font = `600 ${Math.min(11, Math.max(6, Math.floor(cs*0.95/Math.max(txt.length, 1.7))))}px ui-monospace,Menlo,monospace`;
+          g.fillText(txt, x + cs/2, y + cs/2 + 0.5);
+          g.globalAlpha = 1;
+        }
+      }
+      g.strokeStyle = on ? P.accent : P.line;
+      g.lineWidth = on ? 1.6 : 1;
+      g.globalAlpha = on ? 1 : 0.5;
+      g.strokeRect(b.x - .5, b.y - .5, Wd*cs + 1, H*cs + 1);
+      g.globalAlpha = 1;
+    }
   }
+  g.textAlign = "left"; g.textBaseline = "alphabetic";
 }
 
 function paint(){
@@ -283,41 +323,133 @@ function paint(){
   const g = fitCanvas(el("viz"), L.w, L.h);
   g.clearRect(0,0,L.w,L.h);
 
-  let mx = 0, my = 0;
-  for(let i=0;i<X.length;i++){ mx = Math.max(mx, Math.abs(X[i])); my = Math.max(my, Math.abs(Y[i])); }
-
   const f = S.focus;
   const live = f ? new Set(GRP[GID[nc(f.n,f.c)]].members.map(m => nc(m.n,m.c))) : null;
+  drawX(g, P, live);
 
-  drawTensor(g, X, L.ax, L.ay, `x — input (${S.N}, ${S.C}, ${S.H}, ${S.Wd})`, mx, P, live);
-  drawTensor(g, Y, L.bx, L.by, `y — normalised`, my, P, live);
-
-  // the arrow between the two tensors
-  g.fillStyle = P.dim; g.font = "11px ui-sans-serif,system-ui";
-  g.textAlign = "center"; g.textBaseline = "middle";
-  if(L.side){
-    const x = L.tw + 27, y = L.ay + L.th/2;
-    g.fillText("→", x, y - 8);
-    g.font = "10px ui-monospace,Menlo,monospace";
-    g.fillText("γ·x̂+β", x, y + 8);
-  } else {
-    g.fillText("↓  γ·x̂ + β", L.tw/2, L.th + 13);
-  }
-
-  // ring the hovered cell
-  if(f){
-    const ox = f.t === "x" ? L.ax : L.bx, oy = f.t === "x" ? L.ay : L.by;
-    const b = blockXY(ox, oy, f.n, f.c);
-    g.strokeStyle = P.amber; g.lineWidth = 2;
-    g.strokeRect(b.x + f.w*L.cs - 1, b.y + f.h*L.cs - 1, L.cs + 2, L.cs + 2);
+  if(f){                                                    // ring the hovered cell
+    const b = blockXY(f.n, f.c);
+    g.strokeStyle = P.text; g.lineWidth = 2;
+    g.strokeRect(b.x + f.w*L.cs - 1.5, b.y + f.h*L.cs - 1.5, L.cs + 3, L.cs + 3);
   }
   renderMath();
-  paintDist(P, mx, my);
+  paintFocus(P);
+  paintDist(P);
+}
+
+/* --------- the selected number, and only that one, on its way through ---------
+   The whole output tensor told you nothing you could read. One value, in its
+   three states, tells you the entire operation.
+   ------------------------------------------------------------------------- */
+function groupStats(T, grp){
+  let s = 0, k = 0;
+  for(const m of grp.members) for(let h=0;h<S.H;h++) for(let w=0;w<S.Wd;w++){ s += T[idx(m.n,m.c,h,w)]; k++; }
+  const mean = s/k;
+  let ss = 0;
+  for(const m of grp.members) for(let h=0;h<S.H;h++) for(let w=0;w<S.Wd;w++){
+    const d = T[idx(m.n,m.c,h,w)] - mean; ss += d*d;
+  }
+  return {mean, sd: Math.sqrt(ss/k)};
+}
+
+const COL_W = 138, ARROW_W = 132, TILE_W = 88, TILE_H = 48;
+function paintFocus(P){
+  const wpx = 3*COL_W + 2*ARROW_W, hpx = 168;
+  const g = fitCanvas(el("focus"), wpx, hpx);
+  g.clearRect(0, 0, wpx, hpx);
+  const f = S.focus;
+  if(!f) return;
+
+  const {n,c,h,w} = f, i = idx(n,c,h,w);
+  const grp = GRP[GID[nc(n,c)]];
+  const mu = MU[nc(n,c)], va = VA[nc(n,c)], sd = Math.sqrt(va + eps());
+
+  // ONE scale shared by all three axes, so the collapse onto zero is visible
+  // rather than normalised away
+  let span = 1e-6;
+  for(const T of [X, XH, Y]) for(const m of grp.members)
+    for(let hh=0;hh<S.H;hh++) for(let ww=0;ww<S.Wd;ww++)
+      span = Math.max(span, Math.abs(T[idx(m.n,m.c,hh,ww)]));
+
+  const stages = [
+    {T:X,  v:X[i],  head:"x — raw",           note:`x[${n}][${c}][${h}][${w}]`},
+    {T:XH, v:XH[i], head:"x̂ — normalised",    note:"(x − μ) / √(σ²+ε)"},
+    {T:Y,  v:Y[i],  head:"y — after γ, β",    note:"γ·x̂ + β"},
+  ];
+
+  const tileY = 22, axisY = tileY + TILE_H + 30;
+  stages.forEach((st, k) => {
+    const x0 = k*(COL_W + ARROW_W), mid = x0 + COL_W/2;
+    const s2 = groupStats(st.T, grp);
+
+    g.textAlign = "center"; g.textBaseline = "alphabetic";
+    g.font = "600 10px ui-sans-serif,system-ui"; g.fillStyle = P.dim;
+    g.fillText(st.head, mid, 11);
+
+    const tx = mid - TILE_W/2;                              // the value itself
+    g.fillStyle = P.panel; roundRect(g, tx, tileY, TILE_W, TILE_H, 7); g.fill();
+    g.fillStyle = tint(st.v, span, P); roundRect(g, tx, tileY, TILE_W, TILE_H, 7); g.fill();
+    g.strokeStyle = P.frameLine; g.lineWidth = 1.2; g.stroke();
+    g.fillStyle = P.text; g.font = "700 17px ui-monospace,Menlo,monospace";
+    g.textBaseline = "middle";
+    g.fillText(fmt(st.v), mid, tileY + TILE_H/2 + 1);
+
+    g.font = "9.5px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim2;
+    g.textBaseline = "alphabetic";
+    g.fillText(st.note, mid, tileY + TILE_H + 14);
+
+    // where this value sits inside its pooling group, at this stage
+    const aw = COL_W - 14, ax = mid - aw/2, px = v => ax + aw/2 + (v/span)*(aw/2 - 4);
+    g.strokeStyle = P.line; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(ax, axisY); g.lineTo(ax + aw, axisY); g.stroke();
+    g.strokeStyle = P.dim2;
+    g.beginPath(); g.moveTo(px(0), axisY - 5); g.lineTo(px(0), axisY + 5); g.stroke();
+    g.fillStyle = `rgba(${P.neg[0]},${P.neg[1]},${P.neg[2]},.45)`;
+    for(const m of grp.members) for(let hh=0;hh<S.H;hh++) for(let ww=0;ww<S.Wd;ww++){
+      g.beginPath(); g.arc(px(st.T[idx(m.n,m.c,hh,ww)]), axisY, 2, 0, 6.2832); g.fill();
+    }
+    g.fillStyle = P.amber;                                  // this one, marked
+    g.beginPath();
+    g.moveTo(px(st.v), axisY - 4); g.lineTo(px(st.v) - 4, axisY - 11);
+    g.lineTo(px(st.v) + 4, axisY - 11); g.closePath(); g.fill();
+
+    g.font = "9.5px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim;
+    g.fillText(`group μ ${fmt(s2.mean)}   σ ${fmt(s2.sd)}`, mid, axisY + 20);
+  });
+
+  // the two operations, written on the arrows
+  const E = S.epsExp === 0 ? "1" : `1e${S.epsExp}`;
+  const ops = [
+    [`− μ  (${fmt(mu)})`, `÷ √(σ² + ε)  (${fmt(sd,3)})`],
+    [`× γ  (${fmt(GAM[c])})`, `+ β  (${fmt(BET[c])})`],
+  ];
+  ops.forEach(([top, bot], k) => {
+    const x0 = COL_W + k*(COL_W + ARROW_W), x1 = x0 + ARROW_W, y = tileY + TILE_H/2;
+    g.strokeStyle = P.dim2; g.lineWidth = 1.4;
+    g.beginPath(); g.moveTo(x0 + 10, y); g.lineTo(x1 - 14, y); g.stroke();
+    g.beginPath(); g.moveTo(x1 - 14, y); g.lineTo(x1 - 21, y - 4.5);
+    g.lineTo(x1 - 21, y + 4.5); g.closePath(); g.fillStyle = P.dim2; g.fill();
+    g.textAlign = "center"; g.textBaseline = "alphabetic";
+    g.font = "10px ui-monospace,Menlo,monospace";
+    g.fillStyle = k === 0 ? P.violet : P.accent;
+    g.fillText(top, (x0 + x1)/2, y - 11);
+    g.fillText(bot, (x0 + x1)/2, y + 20);
+  });
+
+  const flat = S.aff === "off" || (GAM[c] === 1 && BET[c] === 0);
+  el("focusnote").innerHTML =
+    `Only the value you are pointing at, in its three states. The dots under each are the
+     <b>other numbers pooled into the same μ</b>, on one shared scale — so you can watch the
+     group slide onto zero and shrink to width 1.
+     ${flat ? `<b>γ = 1, β = 0</b>, so the third step is a no-op right now — set affine to
+                <em>learned</em> and it moves again.`
+            : `<b>γ, β</b> then stretch and shift the whole group back out, which is why the layer
+               costs nothing in expressiveness.`}`;
 }
 
 /* --------- every value of every group on one axis, before and after --------- */
 const DROWS = 12;
-function paintDist(P, mx, my){
+function paintDist(P){
   const shown = Math.min(GRP.length, DROWS);
   const avail = Math.max(320, (el("distwrap").clientWidth || 700) - 2);
   const gut = 62, gap = 22;
@@ -327,6 +459,8 @@ function paintDist(P, mx, my){
   const g = fitCanvas(el("dist"), avail, h);
   g.clearRect(0,0,avail,h);
 
+  let mx = 0, my = 0;
+  for(let i=0;i<X.length;i++){ mx = Math.max(mx, Math.abs(X[i])); my = Math.max(my, Math.abs(Y[i])); }
   const spanX = Math.max(mx, 1e-6), spanY = Math.max(my, 1e-6);
   const px = (v, x0, span) => x0 + pw/2 + (v/span)*(pw/2 - 6);
 
@@ -359,13 +493,9 @@ function paintDist(P, mx, my){
     g.globalAlpha = 1;
   }
 
-  const b = S.aff === "learned";
   el("distnote").innerHTML =
-    `Each dot is one number of the tensor. Left: the raw values, one row per pooling group — the groups sit at
-     different centres and have different spreads. Right: the same numbers after the layer${
-       b ? `, rescaled by the learned <span class="pv">γ</span>, <span class="pv">β</span>` : ""}.
-     ${b ? "Turn affine off" : "With affine off or at init"} every row is centred on 0 with variance 1 —
-     that <em>is</em> the whole operation.
+    `Each dot is one number of the tensor, one row per pooling group. Left: the raw values — the
+     groups sit at different centres with different spreads. Right: the same numbers after the layer.
      ${GRP.length > DROWS ? `<br>Showing the first ${DROWS} of ${GRP.length} groups.` : ""}`;
 }
 
@@ -401,28 +531,24 @@ function renderMath(){
   const {n,c,h,w} = f;
   const g  = GRP[GID[nc(n,c)]];
   const mu = MU[nc(n,c)], va = VA[nc(n,c)];
-  const x  = X[idx(n,c,h,w)], y = Y[idx(n,c,h,w)];
+  const i  = idx(n,c,h,w);
+  const x  = X[i], xh = XH[i], y = Y[i];
   const sd = Math.sqrt(va + eps());
   const frozen = S.norm === "batch" && S.mode === "eval";
   const src = frozen ? "running_" : "";
   const E = S.epsExp === 0 ? "1" : `1e${S.epsExp}`;
+  const flat = GAM[c] === 1 && BET[c] === 0;
 
   el("readout").innerHTML =
-    mrow("this cell", `<b>y[${n}][${c}][${h}][${w}]</b>`) +
-    mrow("formula",
-      `<span class="pv">γ[${c}]</span> · ( <span class="xv">x[${n}][${c}][${h}][${w}]</span> −
-       <span class="sv">${src}μ[${c}]</span> ) / √( <span class="sv">${src}σ²[${c}]</span> + ε )
-       + <span class="pv">β[${c}]</span>`) +
-    mrow("values",
-      `${pv(GAM[c])} · ( ${xv(x)} − ${sv(mu)} ) / √( ${sv(va)} + ${E} ) + ${pv(BET[c])}`) +
-    mrow("maths",
-      `${pv(GAM[c])} · ${fmt(x-mu)} / ${fmt(sd, 3)} + ${pv(BET[c])}
-       &nbsp;=&nbsp; <span class="res">${fmt(y)}</span>`) +
-    mrow(frozen ? "eval" : "why these",
-      frozen
-        ? `<span style="color:var(--dim)">eval() ignores this batch entirely — <span class="sv">running_μ</span> and
-           <span class="sv">running_σ²</span> come from the ${S.steps} batch${S.steps===1?"":"es"} fed so far.</span>`
-        : `<span style="color:var(--dim)">${groupWhy(g)}</span>`);
+    mrow("this cell", `<b>x[${n}][${c}][${h}][${w}] = ${xv(x)}</b> &nbsp;→&nbsp; <b>y = ${fmt(y)}</b>`) +
+    mrow("pooled with", frozen
+      ? `<span style="color:var(--dim)">nothing — eval() ignores this batch. <span class="sv">running_μ</span> and
+         <span class="sv">running_σ²</span> come from the ${S.steps} batch${S.steps===1?"":"es"} fed so far.</span>`
+      : `<span style="color:var(--dim)">${groupWhy(g)}</span>`) +
+    mrow("step 1", `x̂ = ( ${xv(x)} − <span class="sv">${src}μ</span> ${sv(mu)} ) / √( <span class="sv">${src}σ²</span> ${sv(va)} + ${E} )
+                    &nbsp;=&nbsp; ${fmt(x-mu)} / ${fmt(sd, 3)} &nbsp;=&nbsp; <span class="res">${fmt(xh)}</span>`) +
+    mrow("step 2", `y = ${pv(GAM[c])} · ${fmt(xh)} + ${pv(BET[c])} &nbsp;=&nbsp; <span class="res">${fmt(y)}</span>`
+                   + (flat ? ` <span style="color:var(--dim2)">— γ = 1, β = 0, so this step does nothing</span>` : ""));
 }
 
 /* ============================== side panels ============================== */
@@ -656,14 +782,11 @@ function hit(ev){
   const rect = el("viz").getBoundingClientRect();
   const x = ev.clientX - rect.left, y = ev.clientY - rect.top;
   const cs = L.cs, bw = S.Wd*cs, bh = S.H*cs;
-  for(const [t, ox, oy] of [["x", L.ax, L.ay], ["y", L.bx, L.by]]){
-    const lx = x - (ox + GUT), ly = y - (oy + HEAD + TOPLBL);
-    if(lx < 0 || ly < 0) continue;
-    const c = Math.floor(lx/(bw + L.g)), n = Math.floor(ly/(bh + L.g));
-    if(c >= S.C || n >= S.N) continue;
-    const ix = lx - c*(bw + L.g), iy = ly - n*(bh + L.g);
-    if(ix >= bw || iy >= bh) continue;
-    return {t, n, c, h: Math.floor(iy/cs), w: Math.floor(ix/cs)};
+  for(let n=0;n<S.N;n++) for(let c=0;c<S.C;c++){
+    const b = blockXY(n, c);
+    const ix = x - b.x, iy = y - b.y;
+    if(ix >= 0 && iy >= 0 && ix < bw && iy < bh)
+      return {t:"x", n, c, h: Math.floor(iy/cs), w: Math.floor(ix/cs)};
   }
   return null;
 }

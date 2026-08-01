@@ -74,6 +74,25 @@ def normalise(x, kind, G=1, eps=1e-5, gamma=None, beta=None, frozen=None):
     return y
 
 
+def normalise_split(x, kind, G=1, eps=1e-5, gamma=None, beta=None, frozen=None):
+    """Same operation, but keeping x-hat — the page now draws it as its own stage,
+    so the claim "x-hat lands on 0 with width 1" has to actually hold."""
+    N, C, H, W = len(x), len(x[0]), len(x[0][0]), len(x[0][0][0])
+    gamma = gamma or [1.0] * C
+    beta = beta or [0.0] * C
+    zero = lambda: [[[[0.0] * W for _ in range(H)] for _ in range(C)] for _ in range(N)]
+    xhat, y = zero(), zero()
+    for members in pools(kind, N, C, G):
+        mean, var, _ = stats(x, members, H, W)
+        for (n, c) in members:
+            mu, va = (frozen[0][c], frozen[1][c]) if frozen else (mean, var)
+            inv = 1.0 / (va + eps) ** 0.5
+            for h, w in product(range(H), range(W)):
+                xhat[n][c][h][w] = (x[n][c][h][w] - mu) * inv
+                y[n][c][h][w] = gamma[c] * xhat[n][c][h][w] + beta[c]
+    return xhat, y
+
+
 def update_running(x, running_mean, running_var, momentum):
     """One BatchNorm training step, PyTorch's rule."""
     N, C, H, W = len(x), len(x[0]), len(x[0][0]), len(x[0][0][0])
@@ -163,6 +182,31 @@ def main():
         assert torch.allclose(got, exp, atol=1e-9), (kind, N, C, H, W, G,
                                                      (got - exp).abs().max().item())
         checked += 1
+
+    # ---- the three stages the "This value, step by step" panel draws ----
+    split_fails = 0
+    for kind, N, C, H, W, G in grid:
+        x = sample(N, C, H, W, seed=N + C)
+        gamma = [0.5 + 0.3 * c for c in range(C)]
+        beta = [-1.0 + 0.4 * c for c in range(C)]
+        eps = 1e-5
+        xhat, y = normalise_split(x, kind, G, eps, gamma, beta)
+        ref = normalise(x, kind, G, eps, gamma, beta)
+        if max(abs(a - b) for a, b in zip(flat(y), flat(ref))) > 1e-9:
+            print(f"FAIL split {kind} {N}x{C}x{H}x{W}: y != gamma*xhat + beta")
+            split_fails += 1
+        for members in pools(kind, N, C, G):
+            vals = [xhat[n][c][h][w] for (n, c) in members
+                    for h, w in product(range(H), range(W))]
+            m = sum(vals) / len(vals)
+            v = sum((t - m) ** 2 for t in vals) / len(vals)
+            _, var, _ = stats(x, members, H, W)
+            if abs(m) > 1e-6 or abs(v - var / (var + eps)) > 1e-6:
+                print(f"FAIL xhat {kind} {N}x{C}x{H}x{W}: mean={m:.2e} var={v:.6f}")
+                split_fails += 1
+                break
+    print(f"{len(grid)} configurations: x-hat is mean 0 / variance 1, and y = gamma*x-hat + beta"
+          + ("" if not split_fails else f" — {split_fails} FAILURES"))
 
     print(f"{len(grid)} configurations: every pooling group normalises to mean 0, variance 1.")
 
