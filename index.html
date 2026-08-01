@@ -307,11 +307,24 @@
       <div class="divider"></div>
       <h2>affine — γ, β</h2>
       <div class="seg wide" id="bn_affseg">
-        <button data-aff="off">off</button>
-        <button data-aff="init">γ=1, β=0</button>
-        <button data-aff="learned">learned</button>
+        <button data-aff="off">affine=False</button>
+        <button data-aff="init">at init</button>
+        <button data-aff="learned">trained</button>
       </div>
       <div class="hint" id="bn_affhint" style="margin-top:5px"></div>
+      <div id="bn_affctrl" style="margin-top:10px">
+        <div class="ctrl" style="margin-bottom:8px">
+          <label for="bn_rgam"><span class="pv" id="bn_gamlbl"></span><b id="bn_vgam"></b></label>
+          <input type="range" id="bn_rgam" min="-2" max="3" step="0.1">
+        </div>
+        <div class="ctrl" style="margin-bottom:4px">
+          <label for="bn_rbet"><span class="pv" id="bn_betlbl"></span><b id="bn_vbet"></b></label>
+          <input type="range" id="bn_rbet" min="-3" max="3" step="0.1">
+        </div>
+        <div class="hint">Drag these and watch the third bell stretch and slide. They act on the
+          channel you are pointing at.</div>
+        <div class="hint" id="bn_afftable" style="margin-top:7px;line-height:1.7"></div>
+      </div>
 
       <div class="divider"></div>
       <h2>Mode</h2>
@@ -366,6 +379,7 @@
     </div>
     <div class="panel">
       <h2>This value, step by step</h2>
+      <div class="formula" id="bn_stepformula" style="margin-bottom:10px"></div>
       <div id="bn_focuswrap"><canvas id="bn_focus"></canvas></div>
       <div class="note" id="bn_focusnote"></div>
       <div id="bn_readout"></div>
@@ -1710,12 +1724,24 @@ function buildData(){
   }
 }
 
-function buildAffine(){
+// gamma and beta are state, not something recomputed every frame — otherwise the
+// sliders would spring back the moment anything else changed
+function buildAffine(reset){
+  if(!reset && GAM && GAM.length === S.C) return;
   GAM = new Float32Array(S.C).fill(1);
   BET = new Float32Array(S.C);
   if(S.aff !== "learned") return;
   const r = prng(555);
   for(let c=0;c<S.C;c++){ GAM[c] = r1(0.4 + r()*1.6); BET[c] = r1(r()*4 - 2); }
+}
+
+// dragging one channel's gamma or beta puts the control into "custom"
+function setAffine(which, v){
+  if(S.aff === "off") return;
+  const c = S.focus ? S.focus.c : 0;
+  if(which === "gam") GAM[c] = v; else BET[c] = v;
+  S.aff = "custom";
+  refresh();
 }
 
 function resetRunning(){
@@ -1819,7 +1845,8 @@ function palette(){
     panel: d ? "#161b22" : "#ffffff",
     frame: d ? "#12171e" : "#f7f9fb",
     frameLine: d ? "#303a47" : "#cbd5df",
-    violet:d ? "#d2a8ff" : "#8250df",
+    vio:   d ? [210,168,255] : [130, 80,223],
+    vioCss:d ? "#d2a8ff" : "#8250df",
     veil:  d ? "rgba(22,27,34,.80)" : "rgba(255,255,255,.80)",
     pos:   d ? [240,161,50]  : [188,108,0],
     neg:   d ? [74,163,255]  : [9,105,218],
@@ -1978,6 +2005,7 @@ function paint(){
     g.strokeRect(b.x + f.w*L.cs - 1.5, b.y + f.h*L.cs - 1.5, L.cs + 3, L.cs + 3);
   }
   renderMath();
+  renderStepFormula();
   paintFocus(P);
   paintDist(P);
 }
@@ -1997,17 +2025,37 @@ function groupStats(T, grp){
   return {mean, sd: Math.sqrt(ss/k)};
 }
 
-const COL_W = 138, ARROW_W = 132, TILE_W = 88, TILE_H = 48;
+const COL_W = 150, ARROW_W = 138, TILE_W = 92, TILE_H = 46;
+const TITLE_Y = 11, TILE_Y = 17, NOTE_Y = TILE_Y + TILE_H + 14;
+const BELL_TOP = 92, AXIS_Y = 154, STATS_Y = 172, FOCUS_H = 186;
+
+// the fitted normal for a set of values, drawn as a real density: squeeze the
+// spread and the curve gets taller, because the area under it is always 1
+function bell(g, m, sd, ax, aw, span, scale, fill, stroke){
+  const half = aw/2 - 4, cx = ax + aw/2, maxH = AXIS_Y - BELL_TOP;
+  g.beginPath();
+  for(let x=ax, first=true; x<=ax+aw; x+=2, first=false){
+    const v = (x - cx)/half*span;
+    const d = Math.exp(-0.5*((v-m)/sd)**2) / (sd*Math.sqrt(2*Math.PI));
+    const y = AXIS_Y - Math.min(maxH, d*scale);
+    first ? g.moveTo(x, y) : g.lineTo(x, y);
+  }
+  g.strokeStyle = stroke; g.lineWidth = 1.4; g.stroke();
+  g.lineTo(ax+aw, AXIS_Y); g.lineTo(ax, AXIS_Y); g.closePath();
+  g.fillStyle = fill; g.fill();
+}
+
 function paintFocus(P){
-  const wpx = 3*COL_W + 2*ARROW_W, hpx = 168;
-  const g = fitCanvas(el("focus"), wpx, hpx);
-  g.clearRect(0, 0, wpx, hpx);
+  const wpx = 3*COL_W + 2*ARROW_W;
+  const g = fitCanvas(el("focus"), wpx, FOCUS_H);
+  g.clearRect(0, 0, wpx, FOCUS_H);
   const f = S.focus;
   if(!f) return;
 
   const {n,c,h,w} = f, i = idx(n,c,h,w);
   const grp = GRP[GID[nc(n,c)]];
   const mu = MU[nc(n,c)], va = VA[nc(n,c)], sd = Math.sqrt(va + eps());
+  const identity = GAM[c] === 1 && BET[c] === 0;
 
   // ONE scale shared by all three axes, so the collapse onto zero is visible
   // rather than normalised away
@@ -2017,79 +2065,113 @@ function paintFocus(P){
       span = Math.max(span, Math.abs(T[idx(m.n,m.c,hh,ww)]));
 
   const stages = [
-    {T:X,  v:X[i],  head:"x — raw",           note:`x[${n}][${c}][${h}][${w}]`},
-    {T:XH, v:XH[i], head:"x̂ — normalised",    note:"(x − μ) / √(σ²+ε)"},
-    {T:Y,  v:Y[i],  head:"y — after γ, β",    note:"γ·x̂ + β"},
+    {T:X,  v:X[i],  head:"x — raw",        note:`x[${n}][${c}][${h}][${w}]`},
+    {T:XH, v:XH[i], head:"x̂ — normalised", note:"(x − μ) / √(σ² + ε)"},
+    {T:Y,  v:Y[i],  head:"y — after γ, β", note: identity ? "γ·x̂ + β  (identity)" : "γ·x̂ + β"},
   ];
+  const st = stages.map(s => Object.assign(s, groupStats(s.T, grp)));
 
-  const tileY = 22, axisY = tileY + TILE_H + 30;
-  stages.forEach((st, k) => {
+  // one vertical scale for all three bells, set by the tallest peak
+  const aw = COL_W - 16;
+  const floor = span/160;                                   // keeps a spike of 0 width drawable
+  let peak = 0;
+  for(const s of st) peak = Math.max(peak, 1/(Math.max(s.sd, floor)*Math.sqrt(2*Math.PI)));
+  const scale = (AXIS_Y - BELL_TOP) / (peak || 1);
+
+  st.forEach((s, k) => {
     const x0 = k*(COL_W + ARROW_W), mid = x0 + COL_W/2;
-    const s2 = groupStats(st.T, grp);
+    const ax = mid - aw/2, px = v => ax + aw/2 + (v/span)*(aw/2 - 4);
+    const last = k === 2;
 
     g.textAlign = "center"; g.textBaseline = "alphabetic";
-    g.font = "600 10px ui-sans-serif,system-ui"; g.fillStyle = P.dim;
-    g.fillText(st.head, mid, 11);
+    g.font = "600 10px ui-sans-serif,system-ui";
+    g.fillStyle = last && identity ? P.dim2 : P.dim;
+    g.fillText(s.head, mid, TITLE_Y);
 
     const tx = mid - TILE_W/2;                              // the value itself
-    g.fillStyle = P.panel; roundRect(g, tx, tileY, TILE_W, TILE_H, 7); g.fill();
-    g.fillStyle = tint(st.v, span, P); roundRect(g, tx, tileY, TILE_W, TILE_H, 7); g.fill();
-    g.strokeStyle = P.frameLine; g.lineWidth = 1.2; g.stroke();
+    g.fillStyle = P.panel; roundRect(g, tx, TILE_Y, TILE_W, TILE_H, 7); g.fill();
+    g.fillStyle = tint(s.v, span, P); roundRect(g, tx, TILE_Y, TILE_W, TILE_H, 7); g.fill();
+    if(last && identity){ g.setLineDash([4,3]); g.strokeStyle = P.dim2; }
+    else g.strokeStyle = P.frameLine;
+    g.lineWidth = 1.2; g.stroke(); g.setLineDash([]);
     g.fillStyle = P.text; g.font = "700 17px ui-monospace,Menlo,monospace";
     g.textBaseline = "middle";
-    g.fillText(fmt(st.v), mid, tileY + TILE_H/2 + 1);
+    g.fillText(fmt(s.v), mid, TILE_Y + TILE_H/2 + 1);
 
     g.font = "9.5px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim2;
     g.textBaseline = "alphabetic";
-    g.fillText(st.note, mid, tileY + TILE_H + 14);
+    g.fillText(s.note, mid, NOTE_Y);
 
-    // where this value sits inside its pooling group, at this stage
-    const aw = COL_W - 14, ax = mid - aw/2, px = v => ax + aw/2 + (v/span)*(aw/2 - 4);
+    // the fitted normal, then the actual values on the axis beneath it
+    const rgb = k === 0 ? P.pos : k === 1 ? P.neg : P.vio;
+    bell(g, s.mean, Math.max(s.sd, floor), ax, aw, span, scale,
+         `rgba(${rgb[0]},${rgb[1]},${rgb[2]},.16)`, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},.85)`);
+
     g.strokeStyle = P.line; g.lineWidth = 1;
-    g.beginPath(); g.moveTo(ax, axisY); g.lineTo(ax + aw, axisY); g.stroke();
-    g.strokeStyle = P.dim2;
-    g.beginPath(); g.moveTo(px(0), axisY - 5); g.lineTo(px(0), axisY + 5); g.stroke();
-    g.fillStyle = `rgba(${P.neg[0]},${P.neg[1]},${P.neg[2]},.45)`;
+    g.beginPath(); g.moveTo(ax, AXIS_Y); g.lineTo(ax + aw, AXIS_Y); g.stroke();
+    g.strokeStyle = P.dim2;                                 // zero
+    g.beginPath(); g.moveTo(px(0), AXIS_Y - 4); g.lineTo(px(0), AXIS_Y + 4); g.stroke();
+    g.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},.65)`;
     for(const m of grp.members) for(let hh=0;hh<S.H;hh++) for(let ww=0;ww<S.Wd;ww++){
-      g.beginPath(); g.arc(px(st.T[idx(m.n,m.c,hh,ww)]), axisY, 2, 0, 6.2832); g.fill();
+      g.beginPath(); g.arc(px(s.T[idx(m.n,m.c,hh,ww)]), AXIS_Y + 4, 1.9, 0, 6.2832); g.fill();
     }
     g.fillStyle = P.amber;                                  // this one, marked
     g.beginPath();
-    g.moveTo(px(st.v), axisY - 4); g.lineTo(px(st.v) - 4, axisY - 11);
-    g.lineTo(px(st.v) + 4, axisY - 11); g.closePath(); g.fill();
+    g.moveTo(px(s.v), AXIS_Y - 3); g.lineTo(px(s.v) - 4, AXIS_Y - 10);
+    g.lineTo(px(s.v) + 4, AXIS_Y - 10); g.closePath(); g.fill();
 
     g.font = "9.5px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim;
-    g.fillText(`group μ ${fmt(s2.mean)}   σ ${fmt(s2.sd)}`, mid, axisY + 20);
+    g.fillText(`μ ${fmt(s.mean)}   σ ${fmt(s.sd)}`, mid, STATS_Y);
   });
 
   // the two operations, written on the arrows
   const E = S.epsExp === 0 ? "1" : `1e${S.epsExp}`;
   const ops = [
-    [`− μ  (${fmt(mu)})`, `÷ √(σ² + ε)  (${fmt(sd,3)})`],
-    [`× γ  (${fmt(GAM[c])})`, `+ β  (${fmt(BET[c])})`],
+    [`− μ  (${fmt(mu)})`, `÷ √(σ² + ε)  (${fmt(sd,3)})`, P.vioCss],
+    [`× γ  (${fmt(GAM[c])})`, `+ β  (${fmt(BET[c])})`, P.accent],
   ];
-  ops.forEach(([top, bot], k) => {
-    const x0 = COL_W + k*(COL_W + ARROW_W), x1 = x0 + ARROW_W, y = tileY + TILE_H/2;
-    g.strokeStyle = P.dim2; g.lineWidth = 1.4;
-    g.beginPath(); g.moveTo(x0 + 10, y); g.lineTo(x1 - 14, y); g.stroke();
-    g.beginPath(); g.moveTo(x1 - 14, y); g.lineTo(x1 - 21, y - 4.5);
-    g.lineTo(x1 - 21, y + 4.5); g.closePath(); g.fillStyle = P.dim2; g.fill();
+  ops.forEach(([top, bot, col], k) => {
+    const x0 = COL_W + k*(COL_W + ARROW_W), x1 = x0 + ARROW_W, y = TILE_Y + TILE_H/2;
+    const dim = k === 1 && identity;
+    g.strokeStyle = dim ? P.line : P.dim2; g.lineWidth = 1.4;
+    g.beginPath(); g.moveTo(x0 + 12, y); g.lineTo(x1 - 16, y); g.stroke();
+    g.beginPath(); g.moveTo(x1 - 16, y); g.lineTo(x1 - 23, y - 4.5);
+    g.lineTo(x1 - 23, y + 4.5); g.closePath(); g.fillStyle = dim ? P.line : P.dim2; g.fill();
     g.textAlign = "center"; g.textBaseline = "alphabetic";
     g.font = "10px ui-monospace,Menlo,monospace";
-    g.fillStyle = k === 0 ? P.violet : P.accent;
+    g.fillStyle = dim ? P.dim2 : col;
     g.fillText(top, (x0 + x1)/2, y - 11);
     g.fillText(bot, (x0 + x1)/2, y + 20);
   });
 
-  const flat = S.aff === "off" || (GAM[c] === 1 && BET[c] === 0);
   el("focusnote").innerHTML =
-    `Only the value you are pointing at, in its three states. The dots under each are the
-     <b>other numbers pooled into the same μ</b>, on one shared scale — so you can watch the
-     group slide onto zero and shrink to width 1.
-     ${flat ? `<b>γ = 1, β = 0</b>, so the third step is a no-op right now — set affine to
-                <em>learned</em> and it moves again.`
-            : `<b>γ, β</b> then stretch and shift the whole group back out, which is why the layer
-               costs nothing in expressiveness.`}`;
+    `The curve is the normal fitted to <b>every number pooled into the same μ</b>, the dots are those
+     numbers, and the triangle is the one you are pointing at. All three share one horizontal scale, so
+     the middle curve is narrower <em>and</em> taller — squeezing the spread to 1 has to push the peak up,
+     the area under a density is always 1.
+     ${identity
+       ? `<br><b>γ = 1, β = 0 right now, so the third curve is the second one exactly.</b> That is what
+          <em>at init</em> means: the affine step is the identity until training moves it. Drag γ or β,
+          or press <em>trained</em>, to separate them.`
+       : `<br>The third curve is the second one <b>stretched by γ = ${fmt(GAM[c])}</b> and
+          <b>shifted by β = ${fmt(BET[c])}</b> — that is the entire affine step, and the only part of this
+          layer with learnable parameters.`}`;
+}
+
+/* ---------- the operation itself, spelled out once, always on screen ---------- */
+function renderStepFormula(){
+  const c = S.focus ? S.focus.c : 0;
+  const identity = GAM[c] === 1 && BET[c] === 0;
+  el("stepformula").innerHTML =
+    `<span class="lbl">1 · normalise — no parameters</span>
+     <b>x̂</b> = ( x − <span class="sv">μ</span> ) / √( <span class="sv">σ²</span> + ε )
+     <span style="color:var(--dim2)">→ always mean 0, variance 1</span>
+     <span class="lbl">2 · rescale — the learnable part</span>
+     <b>y</b> = <span class="pv">γ</span> · x̂ + <span class="pv">β</span>
+     <span style="color:var(--dim2)">→ one (<span class="pv">γ</span>, <span class="pv">β</span>) pair per channel</span>
+     <span class="lbl">for channel ${c}</span>
+     y = <span class="pv">${fmt(GAM[c])}</span> · x̂ ${BET[c] < 0 ? "−" : "+"} <span class="pv">${fmt(Math.abs(BET[c]))}</span>
+     ${identity ? `<span class="flag ok" style="margin-left:6px">identity</span>` : ""}`;
 }
 
 /* --------- every value of every group on one axis, before and after --------- */
@@ -2330,7 +2412,7 @@ function buildControls(){
   DIMS.forEach(P => el("r_"+P.id).addEventListener("input", e => {
     S[P.id] = +e.target.value;
     relink(); fixGroups(); S.focus = null;
-    if(P.id === "C") resetRunning();
+    if(P.id === "C"){ resetRunning(); buildAffine(true); }
     refresh(true);
   }));
 
@@ -2339,7 +2421,9 @@ function buildControls(){
 
   seg("normseg", "norm", v => { S.norm = v; fixGroups(); S.focus = null; refresh(); });
   seg("epsseg",  "eps",  v => { S.epsExp = +v; refresh(); });
-  seg("affseg",  "aff",  v => { S.aff = v; refresh(true); });
+  seg("affseg",  "aff",  v => { S.aff = v; buildAffine(true); refresh(); });
+  el("rgam").addEventListener("input", e => setAffine("gam", +e.target.value));
+  el("rbet").addEventListener("input", e => setAffine("bet", +e.target.value));
   seg("modeseg", "mode", v => { S.mode = v; refresh(); });
   seg("momseg",  "mom",  v => { S.mom = +v; refresh(); });
 
@@ -2349,7 +2433,7 @@ function buildControls(){
 
   document.querySelectorAll("#view-norm [data-preset]").forEach(b => b.addEventListener("click", () => {
     Object.assign(S, JSON.parse(b.dataset.preset));
-    relink(); fixGroups(); S.focus = null; resetRunning(); refresh(true);
+    relink(); fixGroups(); S.focus = null; resetRunning(); buildAffine(true); refresh(true);
   }));
 
   ["dN","dC","dH","dW"].forEach(id => el(id).addEventListener("change", () =>
@@ -2367,7 +2451,7 @@ function setCalc(N, C, H, W){
   if([N,C,H,W].every(v => v <= 10)){
     relink();
     Object.assign(S, {N, C, H, Wd:W});
-    fixGroups(); S.focus = null; resetRunning(); refresh(true);
+    fixGroups(); S.focus = null; resetRunning(); buildAffine(true); refresh(true);
   } else {
     S.calc = {N, C, H, W};
     fixGroups(); refresh();
@@ -2401,10 +2485,28 @@ function syncControls(){
   })[S.norm];
 
   el("affhint").innerHTML = ({
-    off:     `y is exactly the normalised x̂. PyTorch calls this <code>affine=False</code>.`,
-    init:    `γ = 1, β = 0 — how PyTorch initialises them, so the layer starts as pure normalisation.`,
-    learned: `Arbitrary trained values: the layer can now shift and stretch each channel back out again.`,
+    off:     `<code>affine=False</code> — there is no γ or β at all, so y <em>is</em> x̂.`,
+    init:    `<code>affine=True</code>, at PyTorch's initialisation. γ=1 and β=0 are the <b>identity</b>,
+              so the numbers are <b>exactly the same as affine=False</b> — nothing on screen will move.
+              The difference is that they are now parameters with gradients. Press <em>trained</em>, or
+              drag them below, to see where training takes them.`,
+    learned: `Where γ and β tend to land after training — each channel gets its own pair.`,
+    custom:  `Your own γ, β for this channel. Watch the third bell stretch by γ and slide by β.`,
   })[S.aff];
+
+  const affOff = S.aff === "off";
+  const fc = S.focus ? S.focus.c : 0;
+  el("affctrl").style.opacity = affOff ? .4 : 1;
+  el("rgam").disabled = el("rbet").disabled = affOff;
+  el("gamlbl").textContent = `γ · channel ${fc}`;
+  el("betlbl").textContent = `β · channel ${fc}`;
+  el("rgam").value = GAM[fc]; el("vgam").textContent = fmt(GAM[fc]);
+  el("rbet").value = BET[fc]; el("vbet").textContent = fmt(BET[fc]);
+  el("afftable").innerHTML = affOff ? "" :
+    `<b style="color:var(--fg)">every channel</b><br>` +
+    Array.from({length:S.C}, (_,c) =>
+      `<span class="mono" style="${c===fc?"color:var(--fg)":""}">c${c} &nbsp;γ ${fmt(GAM[c])} &nbsp;β ${fmt(BET[c])}</span>`
+    ).join("<br>");
 
   const isBN = S.norm === "batch";
   el("runwrap").style.display = isBN ? "" : "none";

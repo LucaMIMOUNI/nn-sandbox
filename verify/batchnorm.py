@@ -205,6 +205,40 @@ def main():
                 print(f"FAIL xhat {kind} {N}x{C}x{H}x{W}: mean={m:.2e} var={v:.6f}")
                 split_fails += 1
                 break
+    # ---- what the three bell curves claim about each other ----
+    bell_fails = 0
+    for kind, N, C, H, W, G in grid:
+        x = sample(N, C, H, W, seed=C + H)
+        eps = 1e-5
+        # gamma = 1, beta = 0 must make the third stage the second one exactly,
+        # which is the whole "at init == affine=False" point
+        xhat, y_id = normalise_split(x, kind, G, eps)
+        if max(abs(a - b) for a, b in zip(flat(xhat), flat(y_id))) != 0.0:
+            print(f"FAIL identity {kind} {N}x{C}x{H}x{W}: gamma=1,beta=0 is not the identity")
+            bell_fails += 1
+        # and with real gamma, beta the group must move by beta and stretch by |gamma|
+        gamma = [1.7 - 0.4 * c for c in range(C)]
+        beta = [0.9 * c - 1.1 for c in range(C)]
+        xhat, y = normalise_split(x, kind, G, eps, gamma, beta)
+        for members in pools(kind, N, C, G):
+            if len({gamma[c] for (_, c) in members}) > 1:
+                continue                      # mixed-gamma group: no single stretch factor
+            g0, b0 = gamma[members[0][1]], beta[members[0][1]]
+            def ms(T):
+                v = [T[n][c][h][w] for (n, c) in members for h, w in product(range(H), range(W))]
+                m = sum(v) / len(v)
+                return m, (sum((t - m) ** 2 for t in v) / len(v)) ** 0.5
+            mh, sh = ms(xhat)
+            my, sy = ms(y)
+            if abs(my - (g0 * mh + b0)) > 1e-6 or abs(sy - abs(g0) * sh) > 1e-6:
+                print(f"FAIL bell {kind} {N}x{C}x{H}x{W}: mu {my:.4f} vs {g0*mh+b0:.4f}, "
+                      f"sigma {sy:.4f} vs {abs(g0)*sh:.4f}")
+                bell_fails += 1
+                break
+    print(f"{len(grid)} configurations: gamma=1,beta=0 is exactly the identity, and the affine step "
+          f"shifts a group by beta and stretches it by |gamma|"
+          + ("" if not bell_fails else f" — {bell_fails} FAILURES"))
+
     print(f"{len(grid)} configurations: x-hat is mean 0 / variance 1, and y = gamma*x-hat + beta"
           + ("" if not split_fails else f" — {split_fails} FAILURES"))
 

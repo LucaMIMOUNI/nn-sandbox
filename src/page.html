@@ -149,11 +149,24 @@
       <div class="divider"></div>
       <h2>affine — γ, β</h2>
       <div class="seg wide" id="bn_affseg">
-        <button data-aff="off">off</button>
-        <button data-aff="init">γ=1, β=0</button>
-        <button data-aff="learned">learned</button>
+        <button data-aff="off">affine=False</button>
+        <button data-aff="init">at init</button>
+        <button data-aff="learned">trained</button>
       </div>
       <div class="hint" id="bn_affhint" style="margin-top:5px"></div>
+      <div id="bn_affctrl" style="margin-top:10px">
+        <div class="ctrl" style="margin-bottom:8px">
+          <label for="bn_rgam"><span class="pv" id="bn_gamlbl"></span><b id="bn_vgam"></b></label>
+          <input type="range" id="bn_rgam" min="-2" max="3" step="0.1">
+        </div>
+        <div class="ctrl" style="margin-bottom:4px">
+          <label for="bn_rbet"><span class="pv" id="bn_betlbl"></span><b id="bn_vbet"></b></label>
+          <input type="range" id="bn_rbet" min="-3" max="3" step="0.1">
+        </div>
+        <div class="hint">Drag these and watch the third bell stretch and slide. They act on the
+          channel you are pointing at.</div>
+        <div class="hint" id="bn_afftable" style="margin-top:7px;line-height:1.7"></div>
+      </div>
 
       <div class="divider"></div>
       <h2>Mode</h2>
@@ -208,6 +221,7 @@
     </div>
     <div class="panel">
       <h2>This value, step by step</h2>
+      <div class="formula" id="bn_stepformula" style="margin-bottom:10px"></div>
       <div id="bn_focuswrap"><canvas id="bn_focus"></canvas></div>
       <div class="note" id="bn_focusnote"></div>
       <div id="bn_readout"></div>
