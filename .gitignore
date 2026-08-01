@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+
+# Superseded standalone pages — index.html absorbs both of them.
+# Still on disk locally; delete the ignore lines if you want them published.
+conv_transpose2d.html
+batchnorm.html

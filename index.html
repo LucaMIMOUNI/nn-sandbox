@@ -1,0 +1,2385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NN Sandbox — see what each layer actually does</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c222b; --line:#2a323d;
+    --fg:#e6edf3; --dim:#8b949e; --dim2:#6e7681;
+    --accent:#4aa3ff; --accent2:#f0a132; --ok:#3fb950; --bad:#f85149;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f6f8fa; --panel:#ffffff; --panel2:#f0f3f6; --line:#d6dde5;
+      --fg:#1c2128; --dim:#57606a; --dim2:#8c959f;
+      --accent:#0969da; --accent2:#bc6c00;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:16px 18px 56px;
+    background:var(--bg); color:var(--fg);
+    font:13px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  h1{font-size:19px;margin:0 0 3px;letter-spacing:-.01em}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);margin:0 0 10px;font-weight:600}
+  .sub{color:var(--dim);margin:0 0 18px;max-width:80ch;font-size:13px}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  a{color:var(--dim)}
+
+  /* ---------- top bar ---------- */
+  .topbar{max-width:1600px;margin:0 auto 16px;display:flex;gap:14px 18px;align-items:center;
+          flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:12px}
+  .brand{font-weight:700;font-size:15px;letter-spacing:-.01em;white-space:nowrap}
+  .brand span{font-weight:400;color:var(--dim);font-size:12px;margin-left:9px}
+  .tabs{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel2)}
+  .tabs button{border:0;border-radius:0;padding:7px 15px;background:transparent;font-size:12.5px}
+  .tabs button+button{border-left:1px solid var(--line)}
+  .tabs button.on{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+  .view.hidden{display:none}
+  .hero{max-width:1600px;margin:0 auto}
+
+  /* ---------- 3-column shell ---------- */
+  .app{
+    max-width:1600px;margin:0 auto;
+    display:grid;grid-template-columns:262px minmax(0,1fr) 290px;
+    gap:16px;align-items:start;
+  }
+  .side{position:sticky;top:16px;max-height:calc(100vh - 32px);overflow-y:auto;overscroll-behavior:contain}
+  @media (max-width:900px){
+    .app{grid-template-columns:minmax(0,1fr)}
+    .side{position:static;max-height:none;overflow:visible}
+    .col-mid{order:1} .col-left{order:2} .col-right{order:3}
+  }
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 15px;margin-bottom:14px}
+  .panel:last-child{margin-bottom:0}
+
+  /* ---------- controls ---------- */
+  .ctrl{margin-bottom:11px}
+  .ctrl.off{opacity:.35;pointer-events:none}
+  .ctrl label{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--dim);margin-bottom:3px}
+  .ctrl label b{color:var(--fg);font:600 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace}
+  .ctrl input[type=range]{width:100%;accent-color:var(--accent);margin:0;display:block}
+  .hint{font-size:11px;color:var(--dim2);margin-top:1px;line-height:1.4}
+  .k{color:var(--accent)} .s{color:var(--accent2)} .p{color:#d2a8ff}
+  .op{color:#7ee787} .d{color:#ff9bc8}
+  .N{color:var(--accent2)} .C{color:var(--accent)} .HW{color:#d2a8ff}
+
+  button,.btn{
+    background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+    border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit;
+  }
+  button:hover,.btn:hover{border-color:var(--accent);color:var(--accent)}
+  button.on{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+  button:disabled{opacity:.4;cursor:default}
+  button:disabled:hover{border-color:var(--line);color:var(--fg)}
+  .stack-btns{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+  .stack-btns button{text-align:left;line-height:1.35;padding:6px 9px}
+  .stack-btns button b{display:block;font-weight:600}
+  .stack-btns button i{display:block;font-style:normal;font-size:10.5px;color:var(--dim2);
+                       font-family:ui-monospace,Menlo,monospace;margin-top:1px}
+  .stack-btns button:hover i{color:inherit;opacity:.75}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:var(--panel2);flex-wrap:wrap}
+  .seg button{border:0;border-radius:0;padding:6px 11px;background:transparent;flex:1 1 auto}
+  .seg button+button{border-left:1px solid var(--line)}
+  .seg button.on{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+  .seg.wide{width:100%}
+  .divider{border-top:1px solid var(--line);margin:12px 0 11px}
+  .chk{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dim);cursor:pointer}
+  .chk input{accent-color:var(--accent);margin:0}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+  /* ---------- centre ---------- */
+  .modebar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .subbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--dim);min-height:30px}
+  #vizwrap,#bn_vizwrap,#bn_distwrap{overflow-x:auto}
+  #vizwrap{margin-top:6px}
+  #bn_distwrap{margin-top:4px}
+  #viz,#bn_viz{display:block;cursor:crosshair}
+  #bn_dist{display:block}
+  .stepbar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:9px;
+           border-top:1px solid var(--line);font-size:12px}
+  .stepbar button{padding:4px 9px}
+  #sellabel{min-width:118px;text-align:center;color:var(--fg);font-weight:600}
+  #readout,#bn_readout{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:var(--dim);
+           min-height:34px;margin-top:10px;padding:11px 12px 9px;border-top:1px solid var(--line);
+           background:var(--panel2);border-radius:0 0 8px 8px}
+  #readout b,#bn_readout b{color:var(--fg)}
+  .mrow{display:flex;gap:10px;align-items:baseline;padding:2px 0}
+  .mlbl{flex:none;width:76px;text-align:right;font-size:10px;text-transform:uppercase;
+        letter-spacing:.07em;color:var(--dim2);font-family:ui-sans-serif,system-ui}
+  .mval{flex:1;min-width:0;line-height:1.75;word-break:break-word}
+  .iv{color:var(--accent2);font-weight:700}       /* input values   */
+  .wv{color:var(--accent);font-weight:700}        /* kernel weights */
+  .xv{color:var(--accent2);font-weight:700}       /* raw values           */
+  .sv{color:#d2a8ff;font-weight:700}              /* the pooled statistic */
+  .pv{color:var(--accent);font-weight:700}        /* gamma / beta         */
+  .term{padding:1px 5px;margin:1px 1px;border-radius:4px;white-space:nowrap;display:inline-block;
+        background:color-mix(in srgb,var(--line) 42%,transparent)}
+  .term.on{background:color-mix(in srgb,var(--accent2) 30%,transparent);color:var(--fg)}
+  .term.pad{opacity:.45}
+  .res{font-size:16px;font-weight:700;color:var(--fg)}
+  .more{color:var(--dim2)}
+  .legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--dim);margin-top:9px}
+  .sw{width:11px;height:11px;border-radius:3px;display:inline-block;vertical-align:-1px;margin-right:5px}
+  .drop{outline:2px dashed var(--accent);outline-offset:5px;border-radius:8px}
+  .credit{font-size:10.5px;color:var(--dim2);margin-top:8px;line-height:1.45}
+
+  /* ---------- right ---------- */
+  .dims{display:flex;gap:6px;align-items:center;font-size:11px;color:var(--dim2);
+        margin:-2px 0 10px;text-transform:uppercase;letter-spacing:.06em;flex-wrap:wrap}
+  .dims input{width:58px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+              border-radius:6px;padding:4px 6px;text-align:center;
+              font:700 12.5px ui-monospace,SFMono-Regular,Menlo,monospace}
+  #bn_dN,#bn_dC,#bn_dH,#bn_dW{width:44px;padding:4px 3px}
+  .dims input:focus{outline:none;border-color:var(--accent)}
+  .dims button{padding:3px 7px;font-size:11px}
+  .formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.85}
+  .formula .lbl{color:var(--dim);display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;margin-top:7px}
+  .big{font-size:15px;font-weight:700}
+  .note{color:var(--dim);font-size:11.5px;margin-top:9px;line-height:1.6}
+  .flag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
+  .flag.ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+  .flag.bad{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad)}
+  .err{color:var(--bad);font-weight:600}
+  table.stats{width:100%;border-collapse:collapse;font-family:ui-monospace,Menlo,monospace;font-size:11px}
+  table.stats th{color:var(--dim2);font-weight:600;text-align:right;padding:2px 4px;font-size:10px;
+                 letter-spacing:.03em;white-space:nowrap}
+  table.stats td{text-align:right;padding:2px 4px;border-top:1px solid var(--line);color:var(--dim)}
+  table.stats td:first-child,table.stats th:first-child{text-align:left;color:var(--fg)}
+  table.stats tr.on td{background:color-mix(in srgb,var(--accent) 13%,transparent);color:var(--fg)}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">NN Sandbox<span>one layer at a time, number by number</span></div>
+  <div class="tabs" id="tabs">
+    <button data-view="conv">Conv2d</button>
+    <button data-view="convT">ConvTranspose2d</button>
+    <button data-view="norm">Normalisation</button>
+  </div>
+</div>
+
+<!-- ================================================================
+     VIEW 1 + 2 — Conv2d and ConvTranspose2d share this whole page,
+     the only difference is which direction the arithmetic runs.
+     ================================================================ -->
+<section class="view" id="view-conv">
+  <div class="hero">
+    <h1 id="cv_title"></h1>
+    <p class="sub" id="cv_sub"></p>
+  </div>
+
+  <div class="app">
+
+    <!-- ============ LEFT: parameters ============ -->
+    <div class="col-left side">
+      <div class="panel">
+        <h2>Parameters</h2>
+        <div id="ctrls"></div>
+
+        <div class="divider"></div>
+        <h2>Kernel weights</h2>
+        <div class="seg wide" id="kernelseg">
+          <button data-kernel="box">box</button>
+          <button data-kernel="gauss">gauss</button>
+          <button data-kernel="edge">edge</button>
+          <button data-kernel="rand">random</button>
+        </div>
+        <div class="hint" id="kernelhint" style="margin-top:5px"></div>
+
+        <div class="divider"></div>
+        <label class="chk"><input type="checkbox" id="showcounts"> <span id="countlabel"></span></label>
+        <div class="hint" id="counthint" style="margin-top:4px"></div>
+        <div class="hint" id="countscale" style="margin-top:7px;line-height:2"></div>
+
+        <div class="divider"></div>
+        <h2 id="presethead">Presets</h2>
+        <div class="stack-btns" id="presets"></div>
+      </div>
+    </div>
+
+    <!-- ============ CENTRE: the image ============ -->
+    <div class="col-mid">
+      <div class="panel" id="stage">
+        <div class="modebar">
+          <div class="seg" id="modeseg">
+            <button data-mode="matrix">Matrix</button>
+            <button data-mode="mnist">MNIST digit</button>
+            <button data-mode="photo">Photo</button>
+          </div>
+          <div class="subbar" id="subbar"></div>
+        </div>
+
+        <div id="vizwrap"><canvas id="viz"></canvas></div>
+        <div class="hint" id="vizcap" style="margin-top:7px;min-height:16px;line-height:1.5"></div>
+
+        <div class="stepbar">
+          <button id="prev" title="previous cell">◀</button>
+          <span id="sellabel" class="mono"></span>
+          <button id="next" title="next cell">▶</button>
+          <button id="play">▶ play</button>
+          <label class="chk"><input type="checkbox" id="prog"> build up progressively</label>
+          <span class="hint" id="proghint" style="margin:0"></span>
+        </div>
+
+        <div id="readout"></div>
+        <div class="legend" id="legend"></div>
+        <div class="credit" id="credit"></div>
+      </div>
+    </div>
+
+    <!-- ============ RIGHT: shape + diagnostics ============ -->
+    <div class="col-right side">
+      <div class="panel">
+        <h2>Output shape</h2>
+        <div class="dims">
+          <span>input</span>
+          <input type="number" id="ch" min="1" max="4096" step="1" title="input height — any value, it does not have to be drawable">
+          <span>×</span>
+          <input type="number" id="cw" min="1" max="4096" step="1" title="input width">
+          <button id="csync" title="bring the calculator back to the size of the grids">↺ grid</button>
+        </div>
+        <div class="formula" id="formula"></div>
+        <div class="note" id="shapenote"></div>
+      </div>
+      <div class="panel">
+        <h2>Diagnostics</h2>
+        <div id="diag"></div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ================================================================
+     VIEW 3 — normalisation layers
+     ================================================================ -->
+<section class="view hidden" id="view-norm">
+<div class="hero">
+  <h1>BatchNorm, and what it averages over</h1>
+  <p class="sub">
+    Every normalisation layer does the same arithmetic — subtract a mean, divide by a standard deviation,
+    then rescale with <span class="pv">γ</span> and <span class="pv">β</span>. The only thing that changes
+    between BatchNorm, LayerNorm, InstanceNorm and GroupNorm is <b>which numbers get pooled into one mean</b>.
+    <b>Hover any cell</b>: everything outside its pooling group is greyed out, and the maths is written underneath.
+  </p>
+</div>
+
+<div class="app">
+
+  <!-- ============ LEFT: parameters ============ -->
+  <div class="col-left side">
+    <div class="panel">
+      <h2>Tensor</h2>
+      <div id="bn_ctrls"></div>
+
+      <div class="divider"></div>
+      <h2>Normalisation</h2>
+      <div class="seg wide" id="bn_normseg">
+        <button data-norm="batch">Batch</button>
+        <button data-norm="layer">Layer</button>
+        <button data-norm="instance">Instance</button>
+        <button data-norm="group">Group</button>
+      </div>
+      <div class="hint" id="bn_normhint" style="margin-top:5px"></div>
+      <div id="bn_groupwrap" style="margin-top:8px">
+        <label style="font-size:12px;color:var(--dim)">num_groups</label>
+        <div class="seg wide" id="bn_groupseg" style="margin-top:3px"></div>
+      </div>
+
+      <div class="divider"></div>
+      <h2>eps</h2>
+      <div class="seg wide" id="bn_epsseg">
+        <button data-eps="-8">1e-8</button>
+        <button data-eps="-5">1e-5</button>
+        <button data-eps="-2">1e-2</button>
+        <button data-eps="0">1</button>
+      </div>
+      <div class="hint" style="margin-top:5px">Guards the division when a group has (almost) no variance.
+        Tick <em>constant channel</em> below to make it matter.</div>
+
+      <div class="divider"></div>
+      <h2>affine — γ, β</h2>
+      <div class="seg wide" id="bn_affseg">
+        <button data-aff="off">off</button>
+        <button data-aff="init">γ=1, β=0</button>
+        <button data-aff="learned">learned</button>
+      </div>
+      <div class="hint" id="bn_affhint" style="margin-top:5px"></div>
+
+      <div class="divider"></div>
+      <h2>Mode</h2>
+      <div class="seg wide" id="bn_modeseg">
+        <button data-mode="train">train()</button>
+        <button data-mode="eval">eval()</button>
+      </div>
+      <div id="bn_runwrap">
+        <div class="row" style="margin-top:8px">
+          <span style="font-size:12px;color:var(--dim)">momentum</span>
+          <div class="seg" id="bn_momseg" style="flex:1">
+            <button data-mom="0.01">.01</button>
+            <button data-mom="0.1">.1</button>
+            <button data-mom="0.5">.5</button>
+            <button data-mom="1">1</button>
+          </div>
+        </div>
+        <div class="stack-btns">
+          <button id="bn_feed">▶ feed another batch</button>
+          <button id="bn_reset">↺ reset running stats</button>
+        </div>
+        <div class="hint" id="bn_runhint" style="margin-top:6px"></div>
+      </div>
+
+      <div class="divider"></div>
+      <label class="row" style="font-size:12px;color:var(--dim);cursor:pointer">
+        <input type="checkbox" id="bn_dead" style="accent-color:var(--accent)"> channel 0 is constant (σ² = 0)
+      </label>
+
+      <div class="divider"></div>
+      <h2>Presets</h2>
+      <div class="stack-btns">
+        <button data-preset='{"norm":"batch","N":3,"C":4,"H":3,"Wd":3}'>BatchNorm2d(4)</button>
+        <button data-preset='{"norm":"batch","N":1,"C":4,"H":3,"Wd":3}'>BatchNorm, batch of 1</button>
+        <button data-preset='{"norm":"layer","N":3,"C":4,"H":3,"Wd":3}'>LayerNorm</button>
+        <button data-preset='{"norm":"instance","N":3,"C":4,"H":3,"Wd":3}'>InstanceNorm — style transfer</button>
+        <button data-preset='{"norm":"group","G":2,"N":3,"C":4,"H":3,"Wd":3}'>GroupNorm(2, 4)</button>
+        <button data-preset='{"norm":"group","G":4,"N":3,"C":4,"H":3,"Wd":3}'>GroupNorm(C) ≡ InstanceNorm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ CENTRE: the tensor ============ -->
+  <div class="col-mid">
+    <div class="panel">
+      <div id="bn_vizwrap"><canvas id="bn_viz"></canvas></div>
+      <div id="bn_readout"></div>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--accent2)"></span>positive</span>
+        <span><span class="sw" style="background:var(--accent)"></span>negative</span>
+        <span><span class="sw" style="background:var(--panel2);border:1px solid var(--line);opacity:.6"></span>greyed = pooled into a different mean</span>
+        <span>colour scale is shared inside each tensor</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Every value on one axis — before and after</h2>
+      <div id="bn_distwrap"><canvas id="bn_dist"></canvas></div>
+      <div class="note" id="bn_distnote"></div>
+    </div>
+  </div>
+
+  <!-- ============ RIGHT: shape, cost, diagnostics ============ -->
+  <div class="col-right side">
+    <div class="panel">
+      <h2>Shape &amp; cost</h2>
+      <div class="dims">
+        <span>N</span><input type="number" id="bn_dN" min="1" max="8192" step="1">
+        <span>C</span><input type="number" id="bn_dC" min="1" max="8192" step="1">
+        <span>H</span><input type="number" id="bn_dH" min="1" max="8192" step="1">
+        <span>W</span><input type="number" id="bn_dW" min="1" max="8192" step="1">
+        <button id="bn_dsync" title="bring the calculator back to the drawn tensor">↺ drawn</button>
+      </div>
+      <div class="formula" id="bn_formula"></div>
+      <div class="note" id="bn_shapenote"></div>
+    </div>
+    <div class="panel">
+      <h2>Statistics</h2>
+      <div id="bn_stattable"></div>
+    </div>
+    <div class="panel">
+      <h2>Diagnostics</h2>
+      <div id="bn_diag"></div>
+    </div>
+  </div>
+
+</div>
+</section>
+
+<script>
+"use strict";
+
+/* ==================================================================
+   MODULE 1 — Conv2d / ConvTranspose2d
+   ================================================================== */
+const CONV = (function(){
+
+/* ==================================================================
+   Bundled assets — everything is inline, the page works offline.
+   MNIST: 4 samples from the official t10k test set (public domain,
+   Yann LeCun & Corinna Cortes). Photo: Yann LeCun by Jeremy Barande,
+   CC BY-SA 2.0 via Wikimedia Commons, cropped + greyscaled to 112x112.
+   Both stored as base64 of raw 8-bit greyscale bytes.
+   ================================================================== */
+const DIGIT_B64 = [
+  {label:3, b64:"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAECAgID/gP+/gEAAAAAAAAAAAAAAAAAAAAAAAED//7//////////QAAAAAAAAAAAAAAAAAAAAACA//////////////9AAAAAAAAAAAAAAAAAAAAAQICAgIBAAIC/////gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgP///4AAAAAAAAAAAAAAAAAAAAAAAAAAAECAgL////9AAAAAAAAAAAAAAAAAAAAAAAAAAID///////+/AAAAAAAAAAAAAAAAAAAAAAAAAED///////+/QAAAAAAAAAAAAAAAAAAAAAAAAID/////////AAAAAAAAAAAAAAAAAAAAAAAAAAD//////////79AAAAAAAAAAAAAAAAAAAAAAAAAv///////////vwAAAAAAAAAAAAAAAAAAAAAAAACAgICAgP////+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABA////vwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8AAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAD/////AAAAAAAAAAAAAAAAAAAAAAAAgP+/AED/////gAAAAAAAAAAAAAAAAAAAAAAAgL///7///////wAAAAAAAAAAAAAAAAAAAAAAAAD//////////4AAAAAAAAAAAAAAAAAAAAAAAAAA/////////0AAAAAAAAAAAAAAAAAAAAAAAAAAAAC/////gEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="},
+  {label:5, b64:"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAQP+3/Yx5eSYAAAAAAAAAAAAAAAAAAFvU8PDw9vb9/Pz8/PxPAAAAAAAAAAAAAAAAAIX4/Mr8/Pz8/fz8/Pz8xgAAAAAAAAAAAAAAAADi/Pyh76ysZm4nJyel/PZOAAAAAAAAAAAAAAAA4vz8aCwAAAAAAAAADjU1FAAAAAAAAAAAAAAAAID8/EIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABe/PxgKSkTEwAAAAAAAAAAAAAAAAAAAAAAAAAAI9X8/Pz8y8uhaBEAAAAAAAAAAAAAAAAAAAAAAABR/Pz8/Pz8/fzVaQoAAAAAAAAAAAAAAAAAAAAAUfz8/Pz8/P38/Py5AAAAAAAAAAAAAAAAAAAAAAAknuqSt8W//f39/YEAAAAAAAAAAAAAAAAAAAAAAAMLAgYHBovx/Pz5TAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAF9n8/IAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADV/Pz2TgAAAAAAAAAAAAAAAAAAAAAAAAAAAABu9Pz83BQAAAAAAAAAAAAAAAAAAA8OAAAgNru69fz8/NQAAAAAAAAAAAAAAAAAAACewa2t2/z9/Pz8/PNsAAAAAAAAAAAAAAAAAAAAbfX8/Pz8/fz8/PVsAAAAAAAAAAAAAAAAAAAAAACx8fz8/P327u5qAAAAAAAAAAAAAAAAAAAAAAAAABOE/Px4RQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="},
+  {label:7, b64:"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgds/+/v7//ooAAAAAAAAAAAAAAAAASnTq6urq7/39/f39/f3kJQAAAAAAAAAAAAAdv/T9/f39/f39/f39/f39/WAAAAAAAAAAAAAAYf39/f39/f39/f39/f39/d4XAAAAAAAAAAAAAFT4/f39/f399Nvbkf39/f3UAAAAAAAAAAAAAAAAVoPdZ2dnZ0sAAA/9/f391AAAAAAAAAAAAAAAAAAAAAAAAAAAAFbI/f39/Y0AAAAAAAAAAAAAAAAAAAAAAAAAABXL/f39/YUCAAAAAAAAAAAAAAAAAAAAAAAAABnD/f39/f02AAAAAAAAAAAAAAAAAAAAAAAAABnC/f39/eGLCgAAAAAAAAAAAAAAAAAAAAAAAAC+/f39/eYvAAAAAAAAAAAAAAAAAAAAAAAAAABX9P39/fkuAAAAAAAAAAAAAAAAAAAAAAAAAAiQ+/39/fmlAAAAAAAAAAAAAAAAAAAAAAAAAABS/f39/f1ZAAAAAAAAAAAAAAAAAAAAAAAAAABZ+P39/f2XBQAAAAAAAAAAAAAAAAAAAAAAAABd8/39/f3BCQAAAAAAAAAAAAAAAAAAAAAAAAAAwP39/f3nQQAAAAAAAAAAAAAAAAAAAAAAAAAAAFfw/f391BoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAof39/U4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAABB8/XcMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="},
+  {label:0, b64:"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPQMqdsF2dj0AAAAAAAAAAAAAAAAAAAAAAAAOs/Xs8v7+/v7161QAAAAAAAAAAAAAAAAAAAAAl/7+/tXAsrK0/v7xLgAAAAAAAAAAAAAAAAAAK+v+4kAcDAAAAoD8/60RAAAAAAAAAAAAAAAAADj+/WsAAAAAAAAAhvr+SwAAAAAAAAAAAAAAAAA//p4AAAAAAAAAAADd/p0AAAAAAAAAAAAAAAAAwv5nAAAAAAAAAAAAlv7VAAAAAAAAAAAAAAAAItzvOgAAAAAAAAAAAFT+1QAAAAAAAAAAAAAAAH7+qwAAAAAAAAAAAABU/tUAAAAAAAAAAAAAAADW7zwAAAAAAAAAAAAAVP7VAAAAAAAAAAAAAAAA1scAAAAAAAAAAAAAAFT+1QAAAAAAAAAAAAAAC9vHAAAAAAAAAAAAAABU/tUAAAAAAAAAAAAAAGL+xwAAAAAAAAAAAAAAov7RAAAAAAAAAAAAAABi/scAAAAAAAAAAAAAM+7+SwAAAAAAAAAAAAAAYv7HAAAAAAAAAAAAM6X+wwQAAAAAAAAAAAAAAELxxwAAAAAAAAAAA6f+4zcAAAAAAAAAAAAAAAAA1tUUAAAAAAAumMr+/j8AAAAAAAAAAAAAAAAAANb+zLS0tLS06/7+6pwKAAAAAAAAAAAAAAAAAABRzf7+/v7+/v786ngAAAAAAAAAAAAAAAAAAAAAABrS/v7+/v6ZaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="}
+];
+const PHOTO_B64 = "ubKsqKWhnJOQipbY8/v79/n9//////39//D09/Tw/f//////3JJzbombgmpYcYlna15vTS9AUUlITVBUXl14h42CksDV4uXY0dHNv6zG5dLQz6yym7/1/c3e3er/w83s0cKjufT8/f/////86LuQnbqyramkoJuTj42U1fP7+Pf5/f/////9/f3y9PX18/3//f/8wGZZh4WBenR8emZmZF1STVpALSIxLzEoKVA+RV9dWmtvgbXe5+bd2sy+tbu/0M+xpoZ+nKym2NrC3arA3NDVqMD8//////////PQloC6sq2qpaGbk46Ok9j0+/n1+Pz//////f397/Dz9PL4/fzylFSAnZyal6yfoaiQdWhOS1hRTjolKCYyOi4yJCRAUE43UE5efbbe4dm/ubWyqazJ3Z2FgnBZcYSOgIeUw8zH1rXP///////////42ZpzubKuqKSgm5OQjZTU9Pv59ff9//////39/fLy8/fy+PnYm3CQn6G3v7+xrZ2PhGhkX0hHW0dASDwgHyYmIS8mMks4OEtIQkxeja3MzcvAwrqz5f/ErKikkmyTy8OYt9rL3efP3f//////////++KufrmyrKiloJySj4uQ0vT5+fT5/f/////8/f/y8/Lw6ua+naSlxMDQzbq8pLCjnIRxWU1RRT5WRUVhSCwfJCwxRE1LVXR8bm9wfGx9kr/SyMnJteX90cTZrbCpt9zrzdHWv8S8oL/7//3////////swom5s66opKCdko+Kj9H0+/n0+Pz//////fz98Ozy4saho9DY0M3DuayjoZiSmJuFeGhZREQ1OEk/XWphTC5CWHdxW01baG9kTWdUX2aN0OPP1rnE0bvZ67zH58u7zdHcxpfL1aHL//3/////////89Cct7KtqKWfmpOPi47R9Pn59ff8//////38/e7146ik0ubi3NGdmqGcl5CFcXNvb350WElDRzhCUjxegpJuVVt3kopvTURYaHFZVlFreZLGwLa5sbbAyMSlxtbDzfPl3cS3v9S22f/8/P///////PXfyLezramkn5uTjoqNz/T5+/T4/P/////9+/v04aqw3N6+qKCQhX6Qjo+KkJOLfHF1hIBrUllQQEtibnh0dYBjXWFod3RjcIFxZ2dwcEJkZ5q+xMLmyZCHW4W/1LCsxpilx8/jy97//Pz9/////Pn37+G5sq2p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hFoqIB8iM2GfvsbIyM/N0dTQzMvNz83Mz83Py8/MzM/NzczJx8PCxMfGwsLDwLq7vLu7vLy8v8TCvrq3sqGKa1Q/Jh0lLT5QPFZNVoa6upOPvMfJ0Z1VLC0qHSQsLSwmurCpo6Cal46FhYGd2Oz4xmY+IiYkMUh8ssfLzNHR0tbU0MzM0MzPycfLyM3QzczQ0szHwL7DwsDHxL/Cv7y8u7u7ury+u7zAwMK5t7Kfkn5dSTYhKjI+TEhJWlGW0uPEvt7mxMehsUwpMSwlKi8sKLeuqaSdm5aOhoWAnNbq/LtqVDcqMj9ejbrMz9HS0tTS0dDJz9bV0M/Q0c/U1NDPzMvJw7zAwMDExMS/vMC8trq8ubm6u7m/vrzAvr6yoJJ4VURAOzVEST5NUFRYbs30z77n3o2qqrBeJjU4NTI1Ly+3rqihm5eUjYaCgJrU6PXDhFE2NTtIapbCzdLS1NbUz83MzMnIyMjIx8TCxsbIx8fDxMC/vrzCxMC/u7e6u7e3urm5u7q3u7q5wMTCuqiYdU47OkM6TVU7SEhAVnPA+ci3v7Odrs+AMjIzOzg2Mi0ytqyln5qXkouGgX6a1Ofy0oBDPjxCSXOmxtDR0tXW0cnLy8vHxMLCwr++v76/w8PEw8DAw76+ury7ubq7t7a3sbW1tra3t7q6urm8urmpknVRNS42OzxdUTxEX0141fu5i5fQzI2bUDI1MTM3MTIuKrespp+alJCLhYSBm9Hm+dqOUjY7OlGJts3S0tLV0NDP0M3Ix8TDxsLAv8K/vr/CwsLAwMLAu7u5urm5ube2s7K1tba3tbO2u766tra6rY1sST8xJExRRWpZSV5Wd9X8vpOl5dBrTC8sLS8yMS0sKiS1qqWcl5COi4aCfpfS5vTapWM1OEJnk7rN1NHR0NTSzcvHyMbCxL++vLq/v7q5vMLAwL6/vL/Aur67uru3srm1tbu1tre1tbm5t7ezs7WjfFE2OiE2TEVaVk46WXjH+cm/ttLIl0QlKigoLS4oKCUgtamkm5aQjomFgH2TzOX02KRiPDxRb6HCzdTV0NXY0M/Nx8TCwMO8u766wr+5vL7Avr/CwMC/v768u7m2s7GzsbW6ubq3s7e7trWzs7KwqY5iPiktM0lIWE5JSUJvrfLRzcPSt5o/GyQhISUsJSIkILaoo5uUj42KhYKAkMfj8NCjVjtJ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m5CLj4uTkIWEgIKFjpSQnKSopqSjqaSXiXd3dXd0fnl5c29vcHx+foGa2dDAvr/DwrC2vrnJ2NnUs8LJzdLZ1dHU1tHErJyUjoaEgHp3c26BsMPZ1tjd4eLm5eLa2dm3lpeQgYmQi5Kst6iooKiqqqafkJaFgoF6eoSUl5uhprG1qqaoo6OglIV1gX56dXR3a251b3N8fH6HmtzQt7azsbKyzMu7ydbVs7nR0c/c397i39zcxKqdl46HgX56dXRvga7E2dbY3eLl5eXi2trVw6SUloB+iYCQprKyrq6ys6iqs7CmmI+Yn52dqK6qpK6wsKmmppyjn4l6gIF8eXNwc2xvaHB5eXp+ipvLx8O2scbN1NTCydzeyKy10dnc4eLi5+Xj48asn5eOh4J+endxboCtw9rW1tzf4+Xj4tza1cC1kJeSeYGLkqSzurqws7GuqKiwqKWqrbCmpaWgnZygoZyjoaGhoZ2HfIB9dHV0dXBnbGtwen1+go6bybu5vtTm3sTIzdbm3Laoqa27uq6zs7O6v7/GrZ2Xj4eCfXp0cW+AqsPY1tba3+Pl4+Ha2ti+vqaKmo54goqUqrO3t62mpaGprKyqpqampKahnaGakJaPn6OloJyThX1zdXF1d3RqYmdrdXl6gIKOnLPYydbf5+PWz93q69Gzv9Xe49zC1dXQ1M/Gx66dl4+JgX55d3NvgKnA2NXW3OHi5ePi2tnWvLrAnIaQhIKOkpuxrrCln6akpqmpraypqaqlpp2clouNlpykqKGWioFzbnFvfHlnX2dobHp1goGGmKWU2MnH1eHj1Nnn9O/Ru9Hm6+zlz9re1svDxMeunZeQiYB+eXVwbn2qwNnW1drh4+Xj4tnZ1bu6wLWGjpeKgIWdqqWlqaOgqKSssLCytrCuo6GhkouOkJCUm5uWjYd+bGxxdHFuZ2NmZ3F1gYaEj5iohMzLyc3a1cff7/jw2cvY5urq6uHS0tLCv8fHrp+Wj4mCfnl0cW58qr/W1dXa4ePj4+HZ2dW7urnHoYeSj355m6qkpa2lpKafrLawsLOurKmglo2Oj4uSiYuSmod5b2NkbHFrZmdkZHF8foSFhpScrHS11Iri0dHI4fP7897P3Ojr7O7j4uzs3snUya2dlpCHhH56dHNufKm+1dTW2d7i4uLh2tbVvru5ybqQiYaLgIufm6iqm6Sgn6atqa2qrKillo2Qi4WJk5OOhYZ1b2JbZmZiZmZjaHF0fYWJhoqWn7BrnepzmOLJyOLy9/vfy+Hr7O7v3tjq7u/m4siunJaPh4F9eXNwbHyovtbU1Nre4uLi39nY1L65t8a/oYqCgop6i5qhqqSbl5umpqSkn5ujnZOHi4V+jY2Jin54bl1bX19bX2djYmh0eIWHiomPkqOsZ5jerjXdzM/W7v3/58nV6+7v7t7f7u/s6+zIrZ2Xj4eCfHl1cWx5qL/W1dTZ3uHh4uHZ1tS7trbIyKiQfYKAgXiLlp+ampOOkJeam5aXmo+PhHN5gISAhXRsZ1tUWFFaW2FiZGZqeICHhIKSlo6prlaQ1ssYoN7a4eb///Tj0OHr6ujf3+fl5/PwybCflo+Hgn56c3Bseqi/1dTU2d3h4uLh2NXUurezxtGwmIKEgnd1eYmSlJeNj4eJjYaOkpKCfXpzeXdwdHVnUlRVUlZVWGFiZ2dmdHmEhYeQkpOaqqxRj9LPKT7Z6OHU8/j1/d/Q3u7s4eXi3Oz19cmwn5aQh4F9eXRwbHqov9TV1Njd4eHh4dbU0bq1t8bPsJqYfH6Ac2pzhY2LioJ5gnp9foR4cHFoZ2ZqZmdYTExRS0xVWV9kZ2dscHh1gYWKi5iToKqoUZjRzUACmNC1vNbZz9/Wx97z4+Pn7Ofl5uzJsJ+Uj4eAfXl0cGx5pb/U1NLY3d7h397W1dbCurGw0LmgmI58hX5xcHB0eoFzcXB4d3Nxa2ZjZGFaW1RFQ05WVVJVW2FeYWpscH19fn2Kho+WlqCunE6l0ctLADeJs8LAt6Oksbrh6OXv6ujv5+foybGflo6JgH16dXFseaS80tXR2Nrc3uPo4tW+k3NUmPK2rZuchnyGhHhwbmhnY2FYVV9eXVhVTU1FQkNESFBZVFldYWRnY2draHN1foaNj5CXmJihsIZRrdDETgAoNoDGtqmqmJ2w2ubn6url1s/d3smxnZSQh4B+eXVza3Wku9LU0NXf5eXVsoRfSTNCUsT3u7OknJqAgIeAeHFvZ1pRTkVLR0BAPj48Oj5JUVVaXVpfZ2hua2traGx8hIKNkImSlpSYoaRuXr7Pv0MAHC0fX7K1srOut8LR6ujo48fP3uXJsJyXj4aCfHl1cWx3obnQ1tncy6p+VTw2NSlHWlju7Lu5qaObjoKKiX15eHVsXVVSSEhFPENETVRZYWNfY2JkZm9wbmpsbGt3gouNl5CQmJuWnaiWWXHNy7pDABYsGxg8gK6qyN/m0tbi4drM4ePhy7Gfl46HhHx6dXBsd6DA2c+ogmJFMi0tLB1AWkKP/9qtu7Gmn4+Lh4eJgXl3dXFnWllYUFJbXWZoa3F3bGhmZ2twdHRxcG51hIqOjY+XnZuXnayghE6N1MawOAAQJhsUHCBVqbCq1ti/vs/LyM3Q0suyn5aOh4F9eXVxa3ijrY9mSzsyKB0YEw8+UktDwv/Vo6mzpKWak4eKi4mAeHd1eWxoZGZocG5vdHp9dG5raGt3dXh1eHBxhYmTio+SlpiXkKGoknNQtda+qC8ADB0cEBQZFjuFnbu6qZqjpK62trXJsZ+Wj4eBfXp0cHB0blJCNiodFBcXBwo7SEJCY/jy0qGPtqylo5qHh46JiYWEgHx5dHR4d3h8eIKHgnVzbGpzenx8fYB6fo+NjZOUmJyUmJitl4dfbtTPup8mAQwZGRASExQUKkxifp+co5ygsru6ybKflo2HgXx6dXFiTEA1JRQLCQwSBQw+QzpDQJP/4sidcbKuqamlmo6Hjo2LhouChIB8gYGEgoaHgn11bm5veoSAfYR+gomOipqfn5qjoJakn5OBVZzfyLeTHAIOExgPEAwPExIdICk+WoapusLDw8mzn5eQioWAdF5IODEoFgoFBQcKAxI+Pjo7REjM/9jGo2GgsrGqqJ+Qi46NioeEeoGHhIaJkI+Nh4t+fHxzeYaHh4aChI2Jl5aclpyjo5ugpZiObGvP1sO1hhMFCw4UDgwMDg8OFhcYISktRXSq1NzJsqObjoF0X0U1LiggEAkDAwUGBxg6MzM7Pkhd6vPSxKZuhbGssLGqnZOPjo2OhICHhoqLj5OXlo+OhIR+eYaHjZKCi4+Kj5ydm52Un5icqaCagWGY3cvAqHEKBQoLDwwMDA4MDBIUDBQYHyAhL1WKy7OUfGpdSzgvKSQbEAYDAgIHBRk3Li41N0NHaPns1sKdgGqkqay1saacj5KQjY2FhI2Uj5Sam5eSh4l+fXyAh5CPjZSQh5idmJehnZ+Um6Gbl3d1zNjCv5diBgUKDAwMDgwMDA4OEwsKDBIUFxsZIQ==";
+const PHOTO_N = 112;
+function unb64(s){
+  const bin = atob(s), out = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+const DIGITS = DIGIT_B64.map(o => ({label:o.label, px:unb64(o.b64), n:28}));
+let PHOTO = {px:unb64(PHOTO_B64), n:PHOTO_N, credit:true};
+
+/* ================================ state ================================ */
+const S = {
+  layer:"conv",                 // "conv" (gather) | "convT" (scatter)
+  n:5, k:3, s:2, p:1, opad:0, d:1,
+  mode:"matrix", kernel:"box", showCounts:false,
+  digit:0, res:28,
+  sel:{i:1, j:1},        // the cell the stepper / progressive build-up is on
+  focus:null,            // {stage,r,c} — the cell whose maths is on show
+  tap:null,              // {a,b} — kernel weight under the mouse
+  progressive:false,
+  matSeed:1,
+  calc:{h:null, w:null},  // shape calculator dims; null = follow the drawn grid
+};
+const isT = () => S.layer === "convT";
+
+const calcH = () => S.calc.h === null ? S.n : S.calc.h;
+const calcW = () => S.calc.w === null ? S.n : S.calc.w;
+const calcLinked = () => S.calc.h === null && S.calc.w === null;
+
+// every slider spans the same 10 steps so the thumbs line up across parameters
+const PARAMS = [
+  {id:"k",  name:"kernel_size", min:1, max:11, cls:"k",
+   hint:{conv:"size of the window that slides over the input",
+         convT:"size of the stamp each input pixel leaves"}},
+  {id:"s",  name:"stride", min:1, max:10, cls:"s",
+   hint:{conv:"how far the window jumps = the downsampling factor",
+         convT:"gap between stamps = the upsampling factor"}},
+  {id:"p",  name:"padding", min:0, max:9, cls:"p",
+   hint:{conv:"adds this many zero rows/cols round the input first",
+         convT:"crops this many rows/cols off every side"}},
+  {id:"opad", name:"output_padding", min:0, max:9, cls:"op", only:"convT",
+   hint:{conv:"", convT:"adds rows/cols back on bottom & right only"}},
+  {id:"d",  name:"dilation", min:1, max:10, cls:"d",
+   hint:{conv:"spreads the window out with holes",
+         convT:"spreads the stamp out with holes"}},
+];
+
+/* --------- presets: parameters lifted straight out of real networks --------- */
+const PRESETS = {
+  conv:[
+    {t:"LeNet-5 · conv1",              q:{k:5,s:1,p:0,d:1},  n:8,  in:32},
+    {t:"AlexNet · conv1",              q:{k:11,s:4,p:2,d:1}, n:12, in:224},
+    {t:"VGG · the 3×3 that ate the world", q:{k:3,s:1,p:1,d:1}, n:6, in:224},
+    {t:"ResNet · stem",                q:{k:7,s:2,p:3,d:1},  n:8,  in:224},
+    {t:"Inception · 1×1 bottleneck",   q:{k:1,s:1,p:0,d:1},  n:6,  in:28},
+    {t:"MobileNet · depthwise, s2",    q:{k:3,s:2,p:1,d:1},  n:6,  in:112},
+    {t:"DeepLab · dilated 3×3",        q:{k:3,s:1,p:2,d:2},  n:7,  in:28},
+  ],
+  convT:[
+    {t:"DCGAN · first layer (z → 4×4)", q:{k:4,s:1,p:0,opad:0,d:1}, n:1, in:1},
+    {t:"DCGAN / pix2pix · ×2 block",    q:{k:4,s:2,p:1,opad:0,d:1}, n:4, in:32},
+    {t:"U-Net · up-conv 2×2",           q:{k:2,s:2,p:0,opad:0,d:1}, n:4, in:28},
+    {t:"Odena et al. · checkerboard",   q:{k:3,s:2,p:1,opad:1,d:1}, n:4, in:32},
+    {t:"FSRCNN · ×3 deconv",            q:{k:9,s:3,p:3,opad:0,d:1}, n:4, in:28},
+    {t:"size-preserving 3×3",           q:{k:3,s:1,p:1,opad:0,d:1}, n:5, in:32},
+  ],
+};
+
+const el = id => document.getElementById(id);
+let D  = {};        // derived geometry
+let IN = null;      // Float32Array n*n     — the input values
+let W  = null;      // Float32Array k*k     — the kernel weights
+let CAN = null;     // Float32Array ext*ext — the middle grid, as displayed
+let FULLCAN = null; // Float32Array ext*ext — the middle grid, complete
+let OUT = null;     // Float32Array out*out — conv only; convT reads its output off CAN
+let CNT = null;     // Int32Array ext — per-axis count (stamps landing / windows reading)
+let MX = {};        // per-stage max, for colour normalisation
+let L = {};         // pixel layout
+let baseCv = null;  // cached background render
+
+// the stepper walks input pixels for a transposed conv (one stamp at a time)
+// and output pixels for a plain conv (one window position at a time)
+const stepStage = () => isT() ? "in" : "out";
+const stepN     = () => isT() ? S.n : Math.max(D.out, 0);
+const selIdx    = () => S.sel.i*stepN() + S.sel.j;
+
+/* ============================== geometry ==============================
+   Both layers are described by the same four grids:
+     input  →  (kernel)  →  middle grid  →  output
+   convT: the middle grid is the canvas every input pixel stamps into,
+          and the output is that canvas cropped by `padding`.
+   conv:  the middle grid is the zero-padded input, and the output is what
+          the sliding window computes from it.
+   `contrib[r]` is, per axis, the list of {i, tap} pairs linking a middle-grid
+   position to the input pixels that write it (convT) or the output pixels
+   that read it (conv). Everything else is derived from that one table.
+   ====================================================================== */
+function derive(){
+  const {n,k,s,p,opad,d} = S;
+  const span = d*(k-1)+1;
+  const contrib = [];
+  let full, out, ext;
+
+  if(isT()){
+    full = (n-1)*s + span;
+    out  = full - 2*p + opad;
+    ext  = Math.max(full, p + Math.max(out,0));
+    CNT  = new Int32Array(ext);
+    for(let r=0;r<ext;r++){
+      const list = [];
+      const lo = Math.max(0, Math.ceil((r - d*(k-1))/s));
+      const hi = Math.min(n-1, Math.floor(r/s));
+      for(let i=lo;i<=hi;i++){ const t = r - i*s; if(t % d === 0) list.push({i, tap:t/d}); }
+      contrib.push(list); CNT[r] = list.length;
+    }
+  } else {
+    full = n + 2*p;                              // the padded input
+    out  = Math.floor((full - span)/s) + 1;
+    ext  = full;
+    CNT  = new Int32Array(ext);
+    for(let r=0;r<ext;r++){
+      const list = [];
+      for(let a=0;a<k;a++){
+        const t = r - a*d;
+        if(t < 0 || t % s) continue;
+        const R = t/s;
+        if(R >= 0 && R < out) list.push({i:R, tap:a});
+      }
+      contrib.push(list); CNT[r] = list.length;
+    }
+  }
+
+  // how many products land on / read each cell — the checkerboard & coverage story
+  let mn = Infinity, mx = 0;
+  if(out > 0){
+    if(isT()){
+      for(let r=p;r<p+out;r++) for(let c=p;c<p+out;c++){
+        const v = (r<full?CNT[r]:0) * (c<full?CNT[c]:0);
+        if(v<mn) mn=v; if(v>mx) mx=v;
+      }
+    } else {
+      for(let r=p;r<p+n;r++) for(let c=p;c<p+n;c++){
+        const v = CNT[r]*CNT[c];
+        if(v<mn) mn=v; if(v>mx) mx=v;
+      }
+    }
+  }
+  D = {span, full, out, ext, contrib,
+       valid: out > 0, opOk: !isT() || opad < Math.max(s,d),
+       min: mn===Infinity?0:mn, max: mx};
+}
+
+// one axis of the same geometry for any input length — the shape calculator
+// works on sizes far too big to draw, so it cannot lean on derive().
+function axisStats(hin){
+  const {k,s,p,opad,d} = S;
+  const span = d*(k-1)+1;
+  if(isT()){
+    const full = (hin-1)*s + span;
+    return {span, full, out: full - 2*p + opad, valid: full - 2*p + opad > 0, drop:0};
+  }
+  const full = hin + 2*p;
+  const out  = Math.floor((full - span)/s) + 1;
+  return {span, full, out, valid: out > 0, drop: out > 0 ? (full - span) % s : 0};
+}
+
+/* =============================== kernel =============================== */
+let seed = 7;
+function rnd(){ seed = (seed*1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+function buildKernel(){
+  const k = S.k; W = new Float32Array(k*k);
+  if(S.kernel === "box"){ W.fill(1); }
+  else if(S.kernel === "gauss"){
+    const c = (k-1)/2, sig = Math.max(k/3, .5);
+    for(let a=0;a<k;a++) for(let b=0;b<k;b++)
+      W[a*k+b] = Math.round(10*Math.exp(-(((a-c)**2 + (b-c)**2)/(2*sig*sig))))/10;
+  } else if(S.kernel === "edge"){
+    W.fill(-1);
+    const c = Math.floor((k-1)/2);
+    W[c*k+c] = k*k - 1;
+    if(k === 1) W[0] = 1;
+  } else {
+    seed = 7 + k*97;
+    for(let i=0;i<k*k;i++) W[i] = Math.floor(rnd()*4);      // small integers, readable arithmetic
+    if(W.every(v => v === 0)) W[(k*k-1)>>1] = 1;
+  }
+  el("kernelhint").innerHTML = ({
+    box:  isT() ? "All weights = 1, so a canvas value is literally the sum of the input pixels that landed on it."
+                : "All weights = 1, so every output value is literally the sum of the window under it — a blur.",
+    gauss:isT() ? "Bell-shaped weights — the smooth, bilinear-ish upsample."
+                : "Bell-shaped weights — a Gaussian blur.",
+    edge: "Negative surround, positive centre — a Laplacian. Flat regions cancel to 0, edges survive."
+          + (S.mode === "matrix" ? "" : " Switch to Matrix to read the signs."),
+    rand: "Arbitrary small integers, closer to what a trained layer holds.",
+  })[S.kernel];
+}
+
+/* =============================== input ================================ */
+function boxResample(src, sn, dn){
+  const out = new Float32Array(dn*dn), scale = sn/dn;
+  for(let r=0;r<dn;r++){
+    const y0 = r*scale, y1 = (r+1)*scale;
+    for(let c=0;c<dn;c++){
+      const x0 = c*scale, x1 = (c+1)*scale;
+      let acc = 0, wsum = 0;
+      for(let y=Math.floor(y0); y<Math.min(sn, Math.ceil(y1)); y++){
+        const wy = Math.min(y+1,y1) - Math.max(y,y0);
+        for(let x=Math.floor(x0); x<Math.min(sn, Math.ceil(x1)); x++){
+          const wx = Math.min(x+1,x1) - Math.max(x,x0);
+          acc += src[y*sn+x]*wy*wx; wsum += wy*wx;
+        }
+      }
+      out[r*dn+c] = wsum ? acc/wsum : 0;
+    }
+  }
+  return out;
+}
+
+function buildInput(){
+  const n = S.n;
+  if(S.mode === "matrix"){
+    seed = S.matSeed*7919 + 13;                            // deterministic per reroll
+    IN = new Float32Array(n*n);
+    for(let i=0;i<n*n;i++) IN[i] = Math.floor(rnd()*6);    // integers 0…5
+    return;
+  }
+  const src = S.mode === "mnist" ? DIGITS[S.digit] : PHOTO;
+  const f = new Float32Array(src.n*src.n);
+  for(let i=0;i<f.length;i++) f[i] = src.px[i]/255;
+  IN = (src.n === n) ? f : boxResample(f, src.n, n);
+}
+
+/* ============================== the maths ============================== */
+// convT — scatter: every input pixel adds value * kernel into the canvas at i*stride.
+// `limit` stops after that many input pixels, for the progressive build-up.
+function scatterInto(limit){
+  const {n,k,s,d} = S, ext = D.ext;
+  const acc = new Float32Array(ext*ext);
+  const stop = limit === undefined ? n*n : limit;
+  for(let t=0; t<stop; t++){
+    const i = (t/n)|0, j = t%n, v = IN[t];
+    if(v === 0) continue;
+    for(let a=0;a<k;a++){
+      const r = i*s + a*d;
+      for(let b=0;b<k;b++) acc[r*ext + j*s + b*d] += v*W[a*k+b];
+    }
+  }
+  return acc;
+}
+
+function compute(){
+  const ext = D.ext;
+  if(isT()){
+    FULLCAN = scatterInto();
+    CAN = S.progressive ? scatterInto(selIdx()+1) : FULLCAN;
+    OUT = null;
+  } else {
+    // conv — gather: the middle grid is just the zero-padded input
+    CAN = new Float32Array(ext*ext);
+    for(let i=0;i<S.n;i++) for(let j=0;j<S.n;j++) CAN[(i+S.p)*ext + j+S.p] = IN[i*S.n+j];
+    FULLCAN = CAN;
+    const o = Math.max(D.out, 0);
+    OUT = new Float32Array(o*o);
+    for(let r=0;r<o;r++) for(let c=0;c<o;c++){
+      let acc = 0;
+      for(let a=0;a<S.k;a++){
+        const rr = (r*S.s + a*S.d)*ext;
+        for(let b=0;b<S.k;b++) acc += CAN[rr + c*S.s + b*S.d] * W[a*S.k+b];
+      }
+      OUT[r*o+c] = acc;
+    }
+  }
+  const amax = arr => { let m = 0; for(let i=0;i<arr.length;i++) m = Math.max(m, Math.abs(arr[i])); return m || 1; };
+  MX = {in: amax(IN), ker: amax(W),
+        can: isT() ? amax(FULLCAN) : amax(IN),
+        out: isT() ? amax(FULLCAN) : amax(OUT)};
+  D.vmax = MX.can;
+}
+
+// convT — every (input pixel, kernel tap) pair that feeds canvas[R][C]
+function termsFor(R, C){
+  const out = [];
+  if(R >= D.full || C >= D.full) return out;
+  for(const a of (D.contrib[R] || [])) for(const b of (D.contrib[C] || []))
+    out.push({i:a.i, j:b.i, a:a.tap, b:b.tap,
+              v:IN[a.i*S.n + b.i], w:W[a.tap*S.k + b.tap]});
+  return out;
+}
+
+/* ============================== rendering ============================== */
+const dark = () => matchMedia("(prefers-color-scheme: dark)").matches;
+function palette(){
+  const d = dark();
+  return {
+    line:  d ? "#2a323d" : "#d6dde5",
+    dim:   d ? "#8b949e" : "#57606a",
+    dim2:  d ? "#6e7681" : "#8c959f",
+    fg:    d ? "#e6edf3" : "#1c2128",
+    panel: d ? "#161b22" : "#ffffff",
+    void_: d ? "#3a4552" : "#dbe2ea",
+    accent:d ? "#4aa3ff" : "#0969da",
+    amber: d ? "#f0a132" : "#bc6c00",
+    amberRGB: d ? "240,161,50" : "188,108,0",
+    ok:    "#3fb950",
+    veil:  d ? "rgba(22,27,34,.82)" : "rgba(255,255,255,.80)",
+  };
+}
+function heat(v, max){
+  if(!v) return null;
+  const t = Math.min(1, Math.abs(v)/(max || 1));
+  const rgb = v > 0 ? (dark()?"74,163,255":"9,105,218") : (dark()?"248,81,73":"207,34,46");
+  return `rgba(${rgb},${(0.16 + 0.74*t).toFixed(3)})`;
+}
+function grey(v){
+  const g = Math.max(0, Math.min(255, Math.round(255*v)));
+  return `rgb(${g},${g},${g})`;
+}
+const fmt = v => Number.isInteger(v) ? String(v)
+               : Math.abs(v) >= 10 ? v.toFixed(0) : String(Math.round(v*10)/10);
+
+function cellValue(stage, r, c){
+  if(stage === "in")  return IN[r*S.n+c];
+  if(stage === "ker") return W[r*S.k+c];
+  if(isT()){
+    const R = stage === "out" ? r + S.p : r;
+    const C = stage === "out" ? c + S.p : c;
+    if(R >= D.full || C >= D.full) return null;           // beyond the canvas: exact zero
+    return CAN[R*D.ext + C];
+  }
+  if(stage === "can"){
+    const i = r - S.p, j = c - S.p;
+    if(i < 0 || j < 0 || i >= S.n || j >= S.n) return null;  // the zero padding
+    return IN[i*S.n + j];
+  }
+  if(!OUT || !D.valid) return null;
+  if(S.progressive && r*D.out + c > selIdx()) return null;   // not computed yet
+  return OUT[r*D.out + c];
+}
+function cellCount(stage, r, c){
+  if(isT()){
+    const R = stage === "out" ? r + S.p : r;
+    const C = stage === "out" ? c + S.p : c;
+    if(R >= D.full || C >= D.full) return null;
+    return CNT[R]*CNT[C];
+  }
+  return CNT[r]*CNT[c];
+}
+function cellFill(stage, r, c, P){
+  const counted = S.showCounts && (stage === "can" || (isT() && stage === "out"));
+  if(counted){
+    const n = cellCount(stage, r, c);
+    return n === null ? P.void_ : (n === 0 ? P.void_ : heat(n, D.max || 1));
+  }
+  const v = cellValue(stage, r, c);
+  if(v === null) return P.void_;
+  if(S.mode === "matrix" || stage === "ker") return heat(v, MX[stage] ?? 1);
+  return grey(v / (MX[stage] ?? 1));
+}
+
+function layout(){
+  const avail = Math.max(300, el("vizwrap").clientWidth - 2);
+  const gOp = 34, gArrow = 52, capH = 17, rowGap = 30;
+  const outCols = Math.max(D.out, 0);
+  const r1 = S.n + S.k, r2 = D.ext + outCols;
+  const cs = Math.max(3, Math.min(40, Math.min(
+    Math.floor((avail - gOp - 4) / Math.max(r1,1)),
+    Math.floor((avail - gArrow - 4) / Math.max(r2,1)))));
+
+  const h1 = Math.max(S.n, S.k)*cs, h2 = Math.max(D.ext, outCols)*cs;
+  const y1 = capH, y2 = capH + h1 + rowGap + capH;
+  const m1 = n => y1 + (h1 - n*cs)/2, m2 = n => y2 + (h2 - n*cs)/2;
+  const xK = S.n*cs + gOp, xO = D.ext*cs + gArrow;
+
+  L = {cs, gOp, gArrow, y1, y2, h1, h2,
+    w: Math.max(xK + S.k*cs, xO + outCols*cs),
+    h: y2 + h2 + 4,
+    stages: [
+      {key:"in",  x:0,  y:m1(S.n),   cols:S.n,   label:`input ${S.n}×${S.n}`},
+      {key:"ker", x:xK, y:m1(S.k),   cols:S.k,   label:`kernel ${S.k}×${S.k}`},
+      {key:"can", x:0,  y:m2(D.ext), cols:D.ext,
+       label: isT() ? `canvas ${D.full}×${D.full}` : `padded input ${D.full}×${D.full}`},
+      {key:"out", x:xO, y:m2(outCols), cols:outCols,
+       label:`output ${Math.max(D.out,0)}×${Math.max(D.out,0)}`},
+    ]};
+}
+const stage = key => L.stages.find(s => s.key === key);
+
+function fitCanvas(cv, w, h){
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+  cv.style.width = w+"px"; cv.style.height = h+"px";
+  const c = cv.getContext("2d"); c.setTransform(dpr,0,0,dpr,0,0);
+  return c;
+}
+
+function renderBase(){
+  const P = palette(), cs = L.cs;
+  baseCv = baseCv || document.createElement("canvas");
+  const g = fitCanvas(baseCv, L.w, L.h);
+  g.clearRect(0,0,L.w,L.h);
+  const showNums = cs >= 15;
+
+  for(const st of L.stages){
+    if(st.cols <= 0) continue;
+    g.textAlign = "left"; g.textBaseline = "alphabetic";
+    g.font = "11px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim;
+    g.fillText(st.label, st.x, Math.max(11, st.y - 5));
+    g.textAlign = "center"; g.textBaseline = "middle";
+
+    for(let r=0;r<st.cols;r++) for(let c=0;c<st.cols;c++){
+      const x = st.x + c*cs, y = st.y + r*cs;
+      const f = cellFill(st.key, r, c, P);
+      if(f){ g.fillStyle = f; g.fillRect(x, y, cs, cs); }
+      if(cs >= 7){ g.strokeStyle = P.line; g.lineWidth = 1; g.strokeRect(x+.5, y+.5, cs-1, cs-1); }
+      if(!showNums) continue;
+      // the number in a cell is ALWAYS its value — `showCounts` only repaints the background
+      const v = cellValue(st.key, r, c);
+      if(v === null || v === 0) continue;
+      const txt = fmt(v);
+      g.font = `600 ${Math.min(12, Math.max(7, Math.floor(cs*0.92/Math.max(txt.length,1.6))))}px ui-monospace,Menlo,monospace`;
+      const isGrey = S.mode !== "matrix" && !S.showCounts && st.key !== "ker";
+      g.fillStyle = isGrey ? (v/(MX[st.key] ?? 1) > 0.55 ? "#000" : "#fff") : P.fg;
+      g.fillText(txt, x + cs/2, y + cs/2 + .5);
+    }
+  }
+
+  if(isT() && D.valid){                                   // the crop rectangle
+    const st = stage("can");
+    g.strokeStyle = P.ok; g.lineWidth = 2;
+    g.strokeRect(st.x + S.p*cs - 1, st.y + S.p*cs - 1, D.out*cs + 2, D.out*cs + 2);
+  }
+
+  g.fillStyle = P.dim2; g.textAlign = "center"; g.textBaseline = "middle";
+  g.font = "17px ui-sans-serif,system-ui";
+  g.fillText(isT() ? "×" : "⊛", S.n*cs + L.gOp/2, L.y1 + L.h1/2);
+  g.fillText("→", D.ext*cs + L.gArrow/2, L.y2 + L.h2/2);
+  g.font = "10px ui-sans-serif,system-ui";
+  g.fillText(isT() ? "crop" : "slide",   D.ext*cs + L.gArrow/2, L.y2 + L.h2/2 + 16);
+  g.fillText(isT() ? "−"+S.p : "by "+S.s, D.ext*cs + L.gArrow/2, L.y2 + L.h2/2 + 27);
+  g.textAlign = "left"; g.textBaseline = "alphabetic";
+}
+
+/* ---------- what is relevant to the cell under the mouse ----------
+   Two shapes of answer, and both layers have both:
+     "scatter"  hovering an input pixel  → where does this number GO
+     "gather"   hovering an output cell  → where does this number COME FROM
+   `contrib` holds, per destination cell, the single product this source pixel
+   puts there — that is what gets drawn in amber, so a stamp is never confused
+   with the running total underneath it.
+   ------------------------------------------------------------------ */
+function relevance(){
+  const f = S.focus;
+  if(!f) return null;
+  const key = (r,c) => r+","+c;
+  const R = {in:new Set(), ker:new Set(), can:new Set(), out:new Set(),
+             terms:[], contrib:new Map(), kind:null};
+  const put = (stg,r,c,v) => R.contrib.set(stg+":"+r+","+c, v);
+
+  if(isT()){
+    if(f.stage === "in"){
+      R.kind = "scatter"; R.src = {i:f.r, j:f.c};
+      const v = IN[f.r*S.n + f.c];
+      R.in.add(key(f.r, f.c));
+      for(let a=0;a<S.k;a++) for(let b=0;b<S.k;b++){
+        const w = W[a*S.k+b], cr = f.r*S.s + a*S.d, cc = f.c*S.s + b*S.d;
+        R.ker.add(key(a,b)); R.can.add(key(cr,cc)); put("can", cr, cc, v*w);
+        if(D.valid && cr>=S.p && cc>=S.p && cr-S.p<D.out && cc-S.p<D.out){
+          R.out.add(key(cr-S.p, cc-S.p)); put("out", cr-S.p, cc-S.p, v*w);
+        }
+        R.terms.push({a, b, w, v, R:cr, C:cc});
+      }
+      return R;
+    }
+    R.kind = "gather";
+    const cr = f.stage === "out" ? f.r + S.p : f.r;
+    const cc = f.stage === "out" ? f.c + S.p : f.c;
+    R.can.add(key(cr,cc));
+    if(D.valid && cr>=S.p && cc>=S.p && cr-S.p<D.out && cc-S.p<D.out) R.out.add(key(cr-S.p, cc-S.p));
+    R.terms = termsFor(cr, cc);
+    for(const t of R.terms){ R.in.add(key(t.i,t.j)); R.ker.add(key(t.a,t.b)); }
+    R.dst = {R:cr, C:cc};
+    return R;
+  }
+
+  /* ---- plain convolution ---- */
+  if(f.stage === "out"){
+    R.kind = "gather"; R.dst = {r:f.r, c:f.c};
+    R.out.add(key(f.r, f.c));
+    for(let a=0;a<S.k;a++) for(let b=0;b<S.k;b++){
+      const cr = f.r*S.s + a*S.d, cc = f.c*S.s + b*S.d;
+      const i = cr - S.p, j = cc - S.p;
+      const inside = i>=0 && j>=0 && i<S.n && j<S.n;
+      R.ker.add(key(a,b)); R.can.add(key(cr,cc));
+      if(inside) R.in.add(key(i,j));
+      R.terms.push({a, b, w:W[a*S.k+b], v: inside ? IN[i*S.n+j] : 0, i, j, R:cr, C:cc, pad:!inside});
+    }
+    return R;
+  }
+
+  // input pixel (or a padding cell of the middle grid) — where does it go
+  const i = f.stage === "in" ? f.r : f.r - S.p;
+  const j = f.stage === "in" ? f.c : f.c - S.p;
+  const inside = i>=0 && j>=0 && i<S.n && j<S.n;
+  const cr = i + S.p, cc = j + S.p;
+  const v = inside ? IN[i*S.n+j] : 0;
+  R.kind = "scatter"; R.src = {i, j, cr, cc, pad:!inside};
+  R.can.add(key(cr, cc));
+  if(inside) R.in.add(key(i, j));
+  for(const A of (D.contrib[cr] || [])) for(const B of (D.contrib[cc] || [])){
+    const w = W[A.tap*S.k + B.tap];
+    R.ker.add(key(A.tap, B.tap)); R.out.add(key(A.i, B.i));
+    put("out", A.i, B.i, v*w);
+    R.terms.push({a:A.tap, b:B.tap, w, v, R:A.i, C:B.i});
+  }
+  return R;
+}
+
+function paint(){
+  const ctx = fitCanvas(el("viz"), L.w, L.h);
+  const P = palette(), cs = L.cs, dpr = window.devicePixelRatio || 1;
+  ctx.clearRect(0,0,L.w,L.h);
+  ctx.drawImage(baseCv, 0, 0, L.w, L.h);
+
+  const rel = relevance();
+  renderMath(rel);
+  el("vizcap").innerHTML = rel ? captionFor(rel) : "";
+  if(!rel) return;
+
+  // grey out everything, then punch the relevant cells back through
+  ctx.fillStyle = P.veil;
+  for(const st of L.stages){
+    if(st.cols > 0) ctx.fillRect(st.x, st.y, st.cols*cs, st.cols*cs);
+  }
+  const inBox = (st,r,c) => st && st.cols>0 && r>=0 && c>=0 && r<st.cols && c<st.cols;
+  const restore = (st, r, c) => {
+    if(!inBox(st,r,c)) return;
+    const x = st.x + c*cs, y = st.y + r*cs;
+    ctx.drawImage(baseCv, x*dpr, y*dpr, cs*dpr, cs*dpr, x, y, cs, cs);
+  };
+  const outline = (st, r, c, col, wgt) => {
+    if(!inBox(st,r,c)) return;
+    ctx.strokeStyle = col; ctx.lineWidth = wgt;
+    ctx.strokeRect(st.x + c*cs + .5, st.y + r*cs + .5, cs-1, cs-1);
+  };
+  const each = (set, fn) => set.forEach(k => { const [r,c] = k.split(",").map(Number); fn(r,c); });
+
+  each(rel.in,  (r,c) => { restore(stage("in"),  r, c); outline(stage("in"),  r, c, P.amber, 1.5); });
+  each(rel.ker, (r,c) => { restore(stage("ker"), r, c); outline(stage("ker"), r, c, P.accent, 1.5); });
+  each(rel.can, (r,c) => restore(stage("can"), r, c));
+  each(rel.out, (r,c) => restore(stage("out"), r, c));
+
+  // ---- the one thing that makes a scatter readable: show the CONTRIBUTION,
+  //      not the accumulated cell value, wherever this pixel writes.
+  if(rel.contrib.size){
+    let cmax = 0;
+    rel.contrib.forEach(v => cmax = Math.max(cmax, Math.abs(v)));
+    rel.contrib.forEach((val, kk) => {
+      const [stg, rc] = kk.split(":");
+      const [r, c] = rc.split(",").map(Number);
+      const st = stage(stg);
+      if(!inBox(st,r,c)) return;
+      const x = st.x + c*cs, y = st.y + r*cs;
+      const t = Math.min(1, Math.abs(val)/(cmax || 1));
+      ctx.fillStyle = P.panel; ctx.fillRect(x, y, cs, cs);
+      ctx.fillStyle = `rgba(${P.amberRGB},${(0.12 + 0.62*t).toFixed(3)})`;
+      ctx.fillRect(x, y, cs, cs);
+      ctx.strokeStyle = P.amber; ctx.lineWidth = 1.3;
+      ctx.strokeRect(x + .5, y + .5, cs-1, cs-1);
+      if(cs >= 15){
+        const txt = fmt(val);
+        ctx.font = `600 ${Math.min(12, Math.max(7, Math.floor(cs*0.92/Math.max(txt.length,1.6))))}px ui-monospace,Menlo,monospace`;
+        ctx.fillStyle = P.fg; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(txt, x + cs/2, y + cs/2 + .5);
+        ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      }
+    });
+  }
+
+  // the cell being asked about gets the strong outline
+  if(rel.kind === "scatter"){
+    if(isT()) outline(stage("in"), rel.src.i, rel.src.j, P.fg, 2.5);
+    else { outline(stage("in"), rel.src.i, rel.src.j, P.fg, 2.5);
+           outline(stage("can"), rel.src.i + S.p, rel.src.j + S.p, P.fg, 2.5); }
+  } else if(isT()){
+    outline(stage("can"), rel.dst.R, rel.dst.C, P.fg, 2.5);
+    each(rel.out, (r,c) => outline(stage("out"), r, c, P.fg, 2.5));
+  } else {
+    outline(stage("out"), rel.dst.r, rel.dst.c, P.fg, 2.5);
+    each(rel.can, (r,c) => outline(stage("can"), r, c, P.amber, 1.5));
+    // the whole window, dilation holes included
+    const st = stage("can");
+    ctx.strokeStyle = P.amber; ctx.lineWidth = 1.5; ctx.setLineDash([4,3]);
+    ctx.strokeRect(st.x + rel.dst.c*S.s*cs - 1.5, st.y + rel.dst.r*S.s*cs - 1.5,
+                   D.span*cs + 3, D.span*cs + 3);
+    ctx.setLineDash([]);
+  }
+
+  // hovering a kernel weight isolates the single term that uses it
+  if(S.tap){
+    const t = rel.terms.find(t => t.a === S.tap.a && t.b === S.tap.b);
+    outline(stage("ker"), S.tap.a, S.tap.b, P.fg, 2.5);
+    if(t){
+      if(rel.kind === "scatter") outline(stage(isT() ? "can" : "out"), t.R, t.C, P.fg, 2.5);
+      else if(isT())             outline(stage("in"), t.i, t.j, P.fg, 2.5);
+      else                       outline(stage("can"), t.R, t.C, P.fg, 2.5);
+    }
+  }
+
+  if(isT() && D.valid){                                   // keep the crop box readable
+    ctx.globalAlpha = .5; ctx.strokeStyle = P.ok; ctx.lineWidth = 2;
+    const st = stage("can");
+    ctx.strokeRect(st.x + S.p*cs - 1, st.y + S.p*cs - 1, D.out*cs + 2, D.out*cs + 2);
+    ctx.globalAlpha = 1;
+  }
+
+}
+
+// one line of plain English under the grids, so the amber is never a mystery
+function captionFor(rel){
+  const A = t => `<b style="color:var(--accent2);font-weight:600">${t}</b>`;
+  if(rel.kind === "scatter"){
+    if(rel.src.pad)
+      return `This cell is ${A("zero padding")} — the window reads it like any other pixel,
+              but 0·w = 0, so it contributes nothing anywhere.`;
+    const at = `<b>input[${rel.src.i}][${rel.src.j}]</b>`;
+    return isT()
+      ? `${A("Amber")} = what ${at} <em>alone</em> adds to each of those cells. The grey numbers
+         underneath are the running totals of all ${S.n*S.n} stamps, so they are normally
+         <em>bigger</em> — tick <em>build up progressively</em> to watch them fill in one stamp at a time.`
+      : `${A("Amber")} = ${at}'s <em>share</em> of each of those output cells. The rest of each of
+         those sums comes from its ${D.span*D.span - 1} neighbours in the same window.`;
+  }
+  return isT()
+    ? `${A("Amber")} = the input pixels whose stamps reached this one cell, blue = the weight each of
+       them used. Every other pixel's stamp missed it.`
+    : `The ${A("dashed box")} is the ${S.k}×${S.k} window (spanning ${D.span}×${D.span} pixels) that this
+       single output number is the dot product of.`;
+}
+
+/* ======================= the formula, written out ======================= */
+const iv = v => `<span class="iv">${fmt(v)}</span>`;
+const wv = v => `<span class="wv">${fmt(v)}</span>`;
+function row(label, html){ return `<div class="mrow"><span class="mlbl">${label}</span><span class="mval">${html}</span></div>`; }
+
+function renderMath(rel){
+  if(!rel){ el("readout").innerHTML = `<div class="mrow" style="color:var(--dim2)">
+      Hover a number — in the input, the kernel, the middle grid or the output — to see the maths behind it.</div>`; return; }
+  const chipOn = x => S.tap && S.tap.a === x.a && S.tap.b === x.b;
+  const chip = (x, body, cls) => `<span class="term${chipOn(x)?' on':''}${cls?' '+cls:''}">${body}</span>`;
+
+  /* ------------- scatter: where does this input pixel go ------------- */
+  if(rel.kind === "scatter"){
+    const {i,j} = rel.src;
+    if(rel.src.pad){
+      el("readout").innerHTML =
+        row("this cell", `<b>padded_input[${rel.src.cr}][${rel.src.cc}]</b> — a zero added by
+             <span class="p">padding ${S.p}</span>, not part of the image`) +
+        row("maths", `<span style="color:var(--dim2)">The zeros <span class="p">padding</span> adds are read by
+             the window just like real pixels, but 0·w = 0, so they only shrink nothing and shift everything.
+             They are why the border of the output exists at all.</span>`);
+      return;
+    }
+    const v = IN[i*S.n+j];
+    const chips = rel.terms.map(t => isT()
+      ? chip(t, `canvas[${t.R}][${t.C}] += ${iv(v)}·${wv(t.w)} = <b>${fmt(v*t.w)}</b>`)
+      : chip(t, `output[${t.R}][${t.C}] += ${iv(v)}·${wv(t.w)} = <b>${fmt(v*t.w)}</b>`));
+    const shown = chips.slice(0,9).join(" ") + (chips.length>9 ? ` <span class="more">+ ${chips.length-9} more</span>` : "");
+
+    if(isT()){
+      const r0 = i*S.s, c0 = j*S.s, r1 = r0+D.span-1, c1 = c0+D.span-1;
+      el("readout").innerHTML =
+        row("this cell", `<b>input[${i}][${j}] = ${iv(v)}</b> — it is <em>scattered</em>, not gathered`) +
+        row("formula",   `canvas[${i}·<span class="s">${S.s}</span>+a·<span class="d">${S.d}</span>][${j}·<span class="s">${S.s}</span>+b·<span class="d">${S.d}</span>] &nbsp;+=&nbsp; input[${i}][${j}] · w[a][b] &nbsp; for all ${S.k}×${S.k} taps`) +
+        row("maths",     shown) +
+        row("lands on",  D.valid
+            ? `canvas rows <b>${r0}…${r1}</b>, cols <b>${c0}…${c1}</b> &nbsp;→&nbsp; output rows <b>${r0-S.p}…${r1-S.p}</b>, cols <b>${c0-S.p}…${c1-S.p}</b>`
+              + (r0-S.p<0||c0-S.p<0 ? ` <span class="err">— partly cropped away</span>` : "")
+            : `<span class="err">no valid output</span>`);
+      return;
+    }
+
+    const rs = rel.terms.map(t => t.R), cs2 = rel.terms.map(t => t.C);
+    el("readout").innerHTML =
+      row("this cell", `<b>input[${i}][${j}] = ${iv(v)}</b> — one pixel, <em>read</em> by ${rel.terms.length} output cell${rel.terms.length===1?"":"s"}`) +
+      row("formula",   `output[R][C] &nbsp;+=&nbsp; input[${i}][${j}] · w[a][b] &nbsp; whenever
+                        R·<span class="s">${S.s}</span>+a·<span class="d">${S.d}</span> = ${i}+<span class="p">${S.p}</span>`) +
+      row("maths",     shown || `<span class="err">no window covers it</span>`) +
+      row("read by",   rel.terms.length
+          ? `output rows <b>${Math.min(...rs)}…${Math.max(...rs)}</b>, cols <b>${Math.min(...cs2)}…${Math.max(...cs2)}</b>
+             — ${rel.terms.length} of the ${S.k*S.k} taps, because the rest of the windows fall off the image.`
+          : `<span class="err">this pixel is never read</span> — with <span class="s">stride ${S.s}</span> wider than the
+             window span ${D.span}, entire rows and columns are skipped and their information is lost.`);
+    return;
+  }
+
+  /* ------------- gather: what is this output cell made of ------------- */
+  if(!isT()){
+    const {r,c} = rel.dst;
+    const t = rel.terms;
+    const total = t.reduce((a,x) => a + x.v*x.w, 0);
+    const pads = t.filter(x => x.pad).length;
+    const numeric  = t.map(x => chip(x, `${iv(x.v)}·${wv(x.w)}`, x.pad ? "pad" : "")).join(" + ");
+    const products = t.map(x => chip(x, fmt(x.v*x.w), x.pad ? "pad" : "")).join(" + ") || "0";
+    el("readout").innerHTML =
+      row("this cell", `<b>output[${r}][${c}]</b>`) +
+      row("formula",   `Σ<sub>a,b</sub> input[${r}·<span class="s">${S.s}</span>+a·<span class="d">${S.d}</span>−<span class="p">${S.p}</span>][${c}·<span class="s">${S.s}</span>+b·<span class="d">${S.d}</span>−<span class="p">${S.p}</span>] · w[a][b]`) +
+      row("values",    numeric) +
+      row("maths",     `${products} &nbsp;=&nbsp; <span class="res">${fmt(total)}</span>`) +
+      row("why these", `the window's top-left corner sits on input[${r*S.s-S.p}][${c*S.s-S.p}] and covers
+         ${D.span}×${D.span} pixels${S.d>1?` with <span class="d">dilation ${S.d}</span> holes`:""}.
+         ${pads ? `<span style="color:var(--dim2)">${pads} of the ${S.k*S.k} taps land on the zero
+          <span class="p">padding</span> and contribute nothing.</span>` : "Every tap lands inside the image."}`);
+    return;
+  }
+
+  const {R, C} = rel.dst;
+  const beyond = R >= D.full || C >= D.full;
+  const inCrop = D.valid && R>=S.p && C>=S.p && R-S.p<D.out && C-S.p<D.out;
+  const where = inCrop ? `<b>output[${R-S.p}][${C-S.p}]</b> &nbsp;=&nbsp; canvas[${R}][${C}]`
+                       : `canvas[${R}][${C}] <span class="err">— cropped away by padding, never reaches the output</span>`;
+
+  if(beyond){
+    el("readout").innerHTML = row("this cell", where) +
+      row("maths", `<span style="color:var(--dim2)">outside the canvas → exactly <b>0</b>. These are the rows/cols
+           <span class="op">output_padding</span> tacks on; nothing ever stamps here.</span>`);
+    return;
+  }
+
+  const t = rel.terms;
+  const total = t.reduce((a,x) => a + x.v*x.w, 0);
+  const symbolic = t.map(x => chip(x, `input[${x.i}][${x.j}]·w[${x.a}][${x.b}]`)).join(" + ") || "—";
+  const numeric  = t.map(x => chip(x, `${iv(x.v)}·${wv(x.w)}`)).join(" + ") || "—";
+  const products = t.map(x => chip(x, fmt(x.v*x.w))).join(" + ") || "0";
+
+  el("readout").innerHTML =
+    row("this cell", where) +
+    row("formula",   symbolic) +
+    row("values",    numeric) +
+    row("maths",     `${products} &nbsp;=&nbsp; <span class="res">${fmt(total)}</span>`) +
+    row("why these", t.length
+      ? `only these ${t.length} input pixel${t.length===1?"":"s"} have a stamp — anchored at
+         i·<span class="s">${S.s}</span> — that covers row ${R}, col ${C}. Every other one misses it.`
+      : `no input pixel's stamp reaches row ${R}, col ${C}, so it stays <b>0</b>.`);
+}
+
+function renderCountScale(){
+  const box = el("countscale");
+  if(!S.showCounts || !D.valid){ box.innerHTML = ""; return; }
+  const swatches = [];
+  for(let n=D.min; n<=D.max && swatches.length<8; n++)
+    swatches.push(`<span style="display:inline-flex;align-items:center;gap:3px;margin-right:7px">
+      <i style="width:13px;height:13px;border-radius:3px;border:1px solid var(--line);
+                background:${heat(n, D.max||1) || "transparent"}"></i>${n}</span>`);
+  box.innerHTML = `<b style="color:var(--fg)">${isT() ? "terms summed per output cell" : "times each pixel is read"}</b><br>${swatches.join("")}`;
+}
+
+/* ============================== side panels ============================== */
+function renderFormula(){
+  const {k,s,p,opad,d} = S;
+  const h = calcH(), w = calcW();
+  const A = axisStats(h), B = (w === h) ? A : axisStats(w);
+
+  const subT = (hin, r) =>
+    `(${hin}−1)·<span class="s">${s}</span> − 2·<span class="p">${p}</span> + <span class="d">${d}</span>·(<span class="k">${k}</span>−1) + <span class="op">${opad}</span> + 1
+     = <span class="big ${r.valid?'':'err'}">${Math.max(r.out,0)}</span>`;
+  const subC = (hin, r) =>
+    `⌊(${hin} + 2·<span class="p">${p}</span> − <span class="d">${d}</span>·(<span class="k">${k}</span>−1) − 1) / <span class="s">${s}</span>⌋ + 1
+     = <span class="big ${r.valid?'':'err'}">${Math.max(r.out,0)}</span>`;
+  const sub = isT() ? subT : subC;
+
+  el("formula").innerHTML =
+    `<span class="lbl">pytorch</span>${isT()
+        ? `ConvTranspose2d(C, C', ${k}, stride=${s}, padding=${p}${opad?`, output_padding=${opad}`:""}${d>1?`, dilation=${d}`:""})`
+        : `Conv2d(C, C', ${k}, stride=${s}, padding=${p}${d>1?`, dilation=${d}`:""})`}
+     <span class="lbl">shape</span>(N, C, <b>${h}</b>, <b>${w}</b>) → (N, C', <b>${Math.max(A.out,0)}</b>, <b>${Math.max(B.out,0)}</b>)
+     <span class="lbl">formula</span>${isT()
+        ? `(H−1)·<span class="s">s</span> − 2·<span class="p">p</span> + <span class="d">d</span>·(<span class="k">k</span>−1) + <span class="op">op</span> + 1`
+        : `⌊(H + 2·<span class="p">p</span> − <span class="d">d</span>·(<span class="k">k</span>−1) − 1) / <span class="s">s</span>⌋ + 1`}
+     <span class="lbl">${w===h?"substituted":"height"}</span>${sub(h, A)}` +
+    (w===h ? "" : `<span class="lbl">width</span>${sub(w, B)}`);
+
+  const tail = calcLinked() ? "" :
+    `<br><br><span style="color:var(--dim2)">The grids show <b>${S.n}×${S.n}</b> — too big or not square to draw
+     cell by cell, so these numbers are for <b>${h}×${w}</b> only. <em>↺ grid</em> puts them back in sync.</span>`;
+
+  if(isT()){
+    el("shapenote").innerHTML = (A.valid && B.valid
+      ? `The canvas before cropping is <b>${A.full}${w===h?"×"+A.full:" high"}</b>: ${h} stamps spaced by ${s}
+         span ${(h-1)*s}, plus one stamp width ${A.span}. Cropping <span class="p">${p}</span> per side and adding
+         <span class="op">${opad}</span> back on bottom/right leaves <b>${A.out}</b>${w===h?"":" rows; the width works the same way"}.`
+      : `<span class="err">Invalid: padding removes more than the canvas holds
+         (${A.full} − 2·${p} + ${opad} ≤ 0).</span> Lower <span class="p">padding</span>.`) + tail;
+  } else {
+    el("shapenote").innerHTML = (A.valid && B.valid
+      ? `The input is padded to <b>${A.full}</b>. The window spans <span class="d">${d}</span>·(<span class="k">${k}</span>−1)+1
+         = <b>${A.span}</b>, so its top-left corner has ${A.full - A.span + 1} legal positions, and it takes every
+         <span class="s">${s}</span>-th one → <b>${A.out}</b>.` +
+        (A.drop ? ` The division does not come out even: the last <b>${A.drop}</b> row(s)/col(s) are never covered
+                    by any window — that is what the ⌊floor⌋ silently throws away.` : ``)
+      : `<span class="err">Invalid: the ${A.span}×${A.span} window does not fit inside the padded
+         ${A.full}×${A.full} input.</span> Raise <span class="p">padding</span> or lower
+         <span class="k">kernel_size</span>.`) + tail;
+  }
+}
+
+function renderDiag(){
+  const {k,s,d,p,opad,n} = S;
+  if(isT()){
+    const even = (s === 1) || (k % s === 0);
+    const uniform = D.valid && D.min === D.max;
+    el("diag").innerHTML = `
+      <div style="margin-bottom:7px">
+        <span class="flag ${even?'ok':'bad'}">${even?'even overlap':'uneven overlap'}</span>
+        <span style="color:var(--dim);font-size:11.5px;margin-left:7px">
+          <span class="k">k</span> % <span class="s">s</span> = ${k%s}</span>
+      </div>
+      <div class="note" style="margin-top:0">
+        ${even
+          ? `Every interior output position receives the same number of stamps, so no periodic pattern is baked in.`
+          : `<span class="k">kernel_size</span> is not a multiple of <span class="s">stride</span>: some output
+             pixels sum more terms than their neighbours, in a repeating pattern — the classic
+             <b>checkerboard artifact</b>. Turn on <em>colour by number of terms</em> to see it.
+             Fix with <span class="k">k</span> = ${s*Math.max(1,Math.round(k/s))}, or upsample + plain conv.`}
+        <br><br>
+        Contributions per output pixel: <b>${D.min}…${D.max}</b>${uniform?" (uniform)":""}.
+        Borders always get fewer — that part is normal.
+        ${!D.opOk ? `<br><br><span class="err">output_padding must be &lt; max(stride, dilation) = ${Math.max(s,d)};
+                     PyTorch would raise here.</span>` : ""}
+        ${opad>p ? `<br><br><span style="color:var(--dim2)">output_padding (${opad}) exceeds padding (${p}), so the last
+                  ${opad-p} row(s)/col(s) of the output fall outside the canvas and are exactly zero.</span>` : ""}
+      </div>`;
+    return;
+  }
+
+  const same = D.valid && D.out === n && s === 1;
+  const skips = D.min === 0;
+  const factor = D.valid ? (n/D.out) : 0;
+  const notes = [];
+  notes.push(same
+    ? `Output size = input size: <span class="p">padding</span> ${p} exactly compensates a span of ${D.span}
+       (the “same” convolution — it needs p = d·(k−1)/2, so it only works for odd effective kernels).`
+    : `${D.valid ? `${n}×${n} → ${D.out}×${D.out}, a factor of <b>${factor % 1 ? factor.toFixed(2) : factor}</b>.` : ""}
+       ${s > 1 ? `<span class="s">stride ${s}</span> is doing the downsampling — the layer throws away
+                  ${(100*(1-1/(s*s))).toFixed(0)}% of the positions.` : ""}`);
+  notes.push(`Each output value is a sum of <b>${k*k}</b> products and sees a
+     <b>${D.span}×${D.span}</b> patch of the input${d>1?` — <span class="d">dilation ${d}</span> buys that
+     receptive field with the same ${k*k} weights, at the cost of the holes in between`:``}.`);
+  notes.push(skips
+    ? `<span class="err">Some input pixels are read 0 times.</span> stride ${s} exceeds the window span ${D.span},
+       so whole rows and columns never reach the output.`
+    : `Each pixel is read <b>${D.min}…${D.max}</b> times. Border pixels are read fewer times than interior ones —
+       that asymmetry is exactly what <span class="p">padding</span> softens.`);
+  if(p > D.span/2)
+    notes.push(`<span style="color:var(--dim2)">padding ${p} is larger than half the window span, so some output
+       positions see only zeros. PyTorch allows it; it is rarely what you want.</span>`);
+
+  el("diag").innerHTML = `
+    <div style="margin-bottom:7px">
+      <span class="flag ${skips?'bad':'ok'}">${skips ? 'pixels skipped' : same ? 'size preserved' : s>1 ? `downsample ×${s}` : 'full coverage'}</span>
+      <span style="color:var(--dim);font-size:11.5px;margin-left:7px">receptive field ${D.span}×${D.span}</span>
+    </div>
+    <div class="note" style="margin-top:0">${notes.join("<br><br>")}</div>`;
+}
+
+/* ============================== controls ============================== */
+function buildControls(){
+  el("ctrls").innerHTML = PARAMS.map(P => `
+    <div class="ctrl" id="ctrl_${P.id}">
+      <label for="r_${P.id}"><span class="${P.cls||''}">${P.name}</span><b id="v_${P.id}"></b></label>
+      <input type="range" id="r_${P.id}" min="${P.min}" max="${P.max}" step="1">
+      <div class="hint" id="h_${P.id}"></div>
+    </div>`).join("");
+
+  PARAMS.forEach(P => el("r_"+P.id).addEventListener("input", e => {
+    S[P.id] = +e.target.value;      // no cross-clamping: invalid combos are explained in Diagnostics
+    S.tap = null;
+    refresh();
+  }));
+
+  ["ch","cw"].forEach(id => el(id).addEventListener("change", () =>
+    setCalc(+el("ch").value, +el("cw").value)));
+  el("csync").addEventListener("click", () => { relink(); refresh(); });
+
+  document.querySelectorAll("#kernelseg button").forEach(b => b.addEventListener("click", () => {
+    S.kernel = b.dataset.kernel; refresh();
+  }));
+  document.querySelectorAll("#modeseg button").forEach(b =>
+    b.addEventListener("click", () => setMode(b.dataset.mode)));
+
+  el("showcounts").addEventListener("change", e => { S.showCounts = e.target.checked; refresh(); });
+  el("prog").addEventListener("change", e => { S.progressive = e.target.checked; refresh(); });
+  el("prev").addEventListener("click", () => step(-1));
+  el("next").addEventListener("click", () => step(+1));
+  el("play").addEventListener("click", play);
+}
+
+function presetOut(q, hin){
+  const span = q.d*(q.k-1)+1;
+  return isT() ? (hin-1)*q.s + span - 2*q.p + (q.opad||0)
+               : Math.floor((hin + 2*q.p - span)/q.s) + 1;
+}
+function renderPresets(){
+  const list = PRESETS[S.layer];
+  el("presethead").textContent = `Presets — real ${isT() ? "generators" : "backbones"}`;
+  el("presets").innerHTML = list.map((P,i) => {
+    const q = P.q;
+    return `<button data-i="${i}"><b>${P.t}</b><i>k${q.k} s${q.s} p${q.p}${q.opad?` op${q.opad}`:""}${q.d>1?` d${q.d}`:""}
+            · ${P.in}² → ${presetOut(q, P.in)}²</i></button>`;
+  }).join("");
+  el("presets").querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+    const P = list[+b.dataset.i];
+    Object.assign(S, {opad:0}, P.q);
+    if(S.mode === "matrix") S.n = Math.max(1, Math.min(P.n, 12));
+    // the calculator carries the architecture's real input size, unless the
+    // grid already happens to be that size
+    if(P.in === S.n) relink(); else S.calc = {h:P.in, w:P.in};
+    S.focus = null; S.tap = null;
+    refresh(true);
+  }));
+}
+
+function relink(){ S.calc = {h:null, w:null}; }
+
+// a size the grids can actually draw is applied to them; anything else stays
+// in the calculator alone.
+function setCalc(h, w){
+  const cl = v => Math.max(1, Math.min(4096, Math.round(v) || 1));
+  h = cl(h); w = cl(w);
+  const drawable = h === w &&
+    (S.mode === "matrix" ? (h >= 1 && h <= 12) : [8,14,28].includes(h));
+  if(drawable){
+    relink();
+    if(S.mode !== "matrix") S.res = h;
+    S.n = h; S.focus = null; refresh(true);
+  } else {
+    S.calc = {h, w}; refresh();
+  }
+}
+
+function step(dir){
+  stop();
+  const m = Math.max(stepN(), 1), total = m*m;
+  const t = (selIdx() + dir + total) % total;
+  S.sel = {i:(t/m)|0, j:t%m};
+  S.focus = {stage:stepStage(), r:S.sel.i, c:S.sel.j}; S.tap = null;
+  refresh();
+}
+
+let timer = null;
+function stop(){ clearInterval(timer); timer = null; el("play").textContent = "▶ play"; el("play").classList.remove("on"); }
+function play(){
+  if(timer){ stop(); return; }
+  const m = Math.max(stepN(), 1), total = m*m;
+  el("play").textContent = "⏸ pause"; el("play").classList.add("on");
+  S.sel = {i:0, j:0}; S.focus = {stage:stepStage(), r:0, c:0}; refresh();
+  timer = setInterval(() => {
+    const t = selIdx() + 1;
+    if(t >= total){ stop(); return; }
+    S.sel = {i:(t/m)|0, j:t%m};
+    S.focus = {stage:stepStage(), r:S.sel.i, c:S.sel.j};
+    refresh();
+  }, Math.max(16, Math.round(7000/total)));
+}
+
+function setMode(m){
+  stop();
+  S.mode = m;
+  S.n = m === "matrix" ? Math.min(S.n, 12) : S.res;
+  S.focus = null; S.tap = null; relink();
+  refresh(true);
+}
+
+function renderSubbar(){
+  const b = el("subbar");
+  if(S.mode === "matrix"){
+    b.innerHTML = `<span>size</span><div class="seg" id="sizeseg">` +
+      [1,2,3,4,5,6,8,10,12].map(v => `<button data-size="${v}" class="${v===S.n?'on':''}">${v}</button>`).join("") +
+      `</div><button id="reroll">↻ new values</button><span>random integers 0–5</span>`;
+  } else if(S.mode === "mnist"){
+    b.innerHTML = `<span>digit</span><div class="seg" id="digseg">` +
+      DIGITS.map((dg,i) => `<button data-dig="${i}" class="${i===S.digit?'on':''}">${dg.label}</button>`).join("") +
+      `</div><button id="nextdig">next ›</button>` + resHTML();
+  } else {
+    b.innerHTML = `<button id="pick">upload image…</button>
+      <span>or drop one anywhere on this panel</span>` + resHTML() +
+      `<input type="file" id="file" accept="image/*" hidden>`;
+  }
+
+  if(el("reroll")) el("reroll").addEventListener("click", () => { S.matSeed++; refresh(true); });
+  document.querySelectorAll("#sizeseg button").forEach(x =>
+    x.addEventListener("click", () => { S.n = +x.dataset.size; S.focus = null; relink(); refresh(true); }));
+  const dseg = el("digseg");
+  if(dseg) dseg.querySelectorAll("button").forEach(x =>
+    x.addEventListener("click", () => { S.digit = +x.dataset.dig; refresh(true); }));
+  if(el("nextdig")) el("nextdig").addEventListener("click", () => {
+    S.digit = (S.digit+1) % DIGITS.length; refresh(true); });
+  if(el("pick")) el("pick").addEventListener("click", () => el("file").click());
+  if(el("file")) el("file").addEventListener("change", e => {
+    if(e.target.files && e.target.files[0]) loadPhoto(e.target.files[0]); });
+  document.querySelectorAll("#resseg button").forEach(x =>
+    x.addEventListener("click", () => { S.res = +x.dataset.res; S.n = S.res; relink(); refresh(true); }));
+
+  el("credit").innerHTML = S.mode === "photo" && PHOTO.credit
+    ? `Default photo: Yann LeCun by Jérémy Barande / Institut Polytechnique de Paris,
+       <a href="https://creativecommons.org/licenses/by-sa/2.0" target="_blank" rel="noopener">CC BY-SA 2.0</a>,
+       via Wikimedia Commons — cropped and converted to greyscale.`
+    : S.mode === "mnist"
+    ? `Digits: 4 samples from the MNIST test set (Yann LeCun &amp; Corinna Cortes), bundled as raw bytes.`
+    : "";
+}
+function resHTML(){
+  return `<span style="margin-left:6px">resolution</span><div class="seg" id="resseg">` +
+    [8,14,28].map(r => `<button data-res="${r}" class="${r===S.res?'on':''}">${r}</button>`).join("") + `</div>`;
+}
+
+function loadPhoto(file){
+  const fr = new FileReader();
+  fr.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const cv = document.createElement("canvas");
+      cv.width = cv.height = PHOTO_N;
+      const g = cv.getContext("2d");
+      const side = Math.min(img.width, img.height);
+      g.drawImage(img, (img.width-side)/2, (img.height-side)/2, side, side, 0, 0, PHOTO_N, PHOTO_N);
+      const px = g.getImageData(0,0,PHOTO_N,PHOTO_N).data;
+      const grey = new Uint8Array(PHOTO_N*PHOTO_N);
+      for(let i=0;i<grey.length;i++)
+        grey[i] = (0.299*px[i*4] + 0.587*px[i*4+1] + 0.114*px[i*4+2])|0;
+      PHOTO = {px:grey, n:PHOTO_N, credit:false};
+      S.mode = "photo"; S.n = S.res; S.focus = null; refresh(true);
+    };
+    img.src = fr.result;
+  };
+  fr.readAsDataURL(file);
+}
+
+function renderHeader(){
+  el("cv_title").textContent = isT() ? "ConvTranspose2d, pixel by pixel" : "Conv2d, pixel by pixel";
+  el("cv_sub").innerHTML = isT()
+    ? `A transposed convolution does <em>not</em> slide a kernel over its input. It does the opposite:
+       every <b>input</b> pixel <b>stamps a copy of the kernel</b> into a bigger canvas, at spacing
+       <span class="s">stride</span>. Overlapping stamps add up, then <span class="p">padding</span>
+       <b>crops</b> the result.
+       <b>Hover any number</b> and the page works out that number, greying out everything not involved in it.`
+    : `A convolution <b>slides a <span class="k">k×k</span> window</b> over the zero-<span class="p">padded</span>
+       input, jumping <span class="s">stride</span> pixels at a time, and writes one number per position: the sum
+       of window × kernel. <b>Hover an output cell</b> to see the window it came from, or <b>hover an input pixel</b>
+       to see every output cell that reads it — the same arithmetic, read backwards.`;
+
+  el("legend").innerHTML = [
+    `<span><span class="sw" style="border:2px solid var(--accent2)"></span>input pixels involved</span>`,
+    `<span><span class="sw" style="border:2px solid var(--accent)"></span>kernel weights involved</span>`,
+    `<span><span class="sw" style="background:color-mix(in srgb,var(--accent2) 45%,transparent);border:1px solid var(--accent2)"></span>this pixel's contribution</span>`,
+    `<span><span class="sw" style="background:var(--panel2);border:1px solid var(--line);opacity:.6"></span>greyed = not part of this sum</span>`,
+    isT() ? `<span><span class="sw" style="border:2px solid var(--ok)"></span>kept after <span class="p">padding</span> crop</span>` : "",
+    `<span><span class="sw" style="background:#dbe2ea;border:1px solid var(--line)"></span>${isT() ? "outside the canvas — exact zero" : "zero padding"}</span>`,
+  ].join("");
+
+  el("countlabel").textContent = isT() ? "colour by number of terms" : "colour by how often each pixel is read";
+  el("counthint").innerHTML = isT()
+    ? `Cell <em>numbers</em> never change — only the background. Pale = few products summed into that cell,
+       strong = many. When it is uneven across the output you get checkerboarding.`
+    : `Paints the padded input by how many windows read each pixel. Borders are read less; with a large
+       <span class="s">stride</span> some pixels are read zero times and simply vanish from the output.`;
+  el("proghint").textContent = isT() ? "only the stamps up to the current pixel"
+                                     : "only the window positions up to the current one";
+}
+
+function syncControls(){
+  PARAMS.forEach(P => {
+    el("r_"+P.id).value = S[P.id];
+    el("v_"+P.id).textContent = S[P.id];
+    el("h_"+P.id).textContent = P.hint[S.layer];
+    el("ctrl_"+P.id).style.display = (P.only && P.only !== S.layer) ? "none" : "";
+  });
+  el("showcounts").checked = S.showCounts;
+  renderCountScale();
+  el("ch").value = calcH(); el("cw").value = calcW();
+  el("csync").style.display = calcLinked() ? "none" : "";
+  el("prog").checked = S.progressive;
+  const lbl = isT() ? "input" : "output";
+  el("sellabel").textContent = `${lbl}[${S.sel.i}][${S.sel.j}]`;
+  document.querySelectorAll("#modeseg button").forEach(b =>
+    b.classList.toggle("on", b.dataset.mode === S.mode));
+  document.querySelectorAll("#kernelseg button").forEach(b =>
+    b.classList.toggle("on", b.dataset.kernel === S.kernel));
+}
+
+/* ============================== interaction ============================== */
+function hit(ev){
+  const rect = el("viz").getBoundingClientRect();
+  const x = ev.clientX - rect.left, y = ev.clientY - rect.top, cs = L.cs;
+  for(const st of L.stages){
+    if(st.cols <= 0) continue;
+    const c = Math.floor((x - st.x)/cs), r = Math.floor((y - st.y)/cs);
+    if(c>=0 && r>=0 && c<st.cols && r<st.cols) return {stage:st.key, r, c};
+  }
+  return null;
+}
+
+function wire(){
+  const cv = el("viz");
+  cv.addEventListener("mousemove", e => {
+    const h = hit(e);
+    if(!h) return;                                        // between grids: keep the last reading
+    if(h.stage === "ker"){                                // kernel hover only picks out one term
+      const t = {a:h.r, b:h.c};
+      if(!S.tap || S.tap.a !== t.a || S.tap.b !== t.b){ S.tap = t; paint(); }
+      return;
+    }
+    S.tap = null;
+    const f = S.focus;
+    if(f && f.stage === h.stage && f.r === h.r && f.c === h.c) return;
+    S.focus = h;
+    if(h.stage === stepStage()){                          // also drives the progressive build-up
+      stop(); S.sel = {i:h.r, j:h.c};
+      if(S.progressive){ compute(); syncControls(); renderBase(); }
+      else syncControls();
+    }
+    paint();
+  });
+
+  const st = el("stage");
+  ["dragenter","dragover"].forEach(t => st.addEventListener(t, e => {
+    e.preventDefault(); st.classList.add("drop"); }));
+  ["dragleave","drop"].forEach(t => st.addEventListener(t, e => {
+    e.preventDefault(); st.classList.remove("drop"); }));
+  st.addEventListener("drop", e => {
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if(f && f.type.startsWith("image/")) loadPhoto(f);
+  });
+
+  addEventListener("keydown", e => {
+    if(document.getElementById("view-conv").classList.contains("hidden")) return;
+    const m = Math.max(stepN(), 1);
+    const map = {ArrowLeft:-1, ArrowRight:1, ArrowUp:-m, ArrowDown:m};
+    if(!(e.key in map) || e.target.tagName === "INPUT") return;
+    e.preventDefault(); step(map[e.key]);
+  });
+
+  let t; addEventListener("resize", () => { clearTimeout(t); t = setTimeout(() => {
+    if(!document.getElementById("view-conv").classList.contains("hidden")) refresh();
+  }, 120); });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if(!document.getElementById("view-conv").classList.contains("hidden")) refresh();
+  });
+}
+
+/* ================================ main ================================ */
+// the most instructive cell to open on: for convT the output cell with the most
+// contributors, for conv a window sitting fully inside the image
+function bestExample(){
+  if(!D.valid) return null;
+  const mid = (D.out-1)/2;
+  if(!isT()){
+    // prefer a window sitting entirely inside the image, as close to the middle
+    // as that allows — a border window full of padding zeros explains nothing
+    const lo = Math.ceil(S.p/S.s), hi = Math.floor((S.p + S.n - D.span)/S.s);
+    let r = Math.round(mid);
+    if(hi >= lo) r = Math.max(lo, Math.min(hi, r));
+    r = Math.max(0, Math.min(D.out-1, r));
+    return {stage:"out", r, c:r};
+  }
+  let best = null, bestScore = -1;
+  for(let r=0;r<D.out;r++) for(let c=0;c<D.out;c++){
+    const R = r+S.p, C = c+S.p;
+    if(R>=D.full || C>=D.full) continue;
+    const score = CNT[R]*CNT[C]*100 - (Math.abs(r-mid) + Math.abs(c-mid));
+    if(score > bestScore){ bestScore = score; best = {stage:"out", r, c}; }
+  }
+  return best;
+}
+
+function clampFocus(){
+  const f = S.focus;
+  if(!f) return;
+  const st = stage(f.stage);
+  if(!st || st.cols <= 0 || f.r >= st.cols || f.c >= st.cols) S.focus = null;
+}
+
+function refresh(rebuildInput){
+  derive();
+  buildKernel();
+  if(rebuildInput || !IN || IN.length !== S.n*S.n) buildInput();
+  const m = Math.max(stepN(), 1);
+  S.sel = {i: Math.min(S.sel.i, m-1), j: Math.min(S.sel.j, m-1)};
+  compute();
+  syncControls();
+  renderSubbar();
+  renderFormula();
+  renderDiag();
+  layout();
+  clampFocus();
+  if(!S.focus && D.valid) S.focus = bestExample();         // open on a real worked example
+  renderBase();
+  paint();
+}
+
+buildControls();
+wire();
+
+return {
+  show(layer){
+    stop();
+    if(layer !== S.layer){
+      S.layer = layer;
+      S.focus = null; S.tap = null; S.sel = {i:0, j:0};
+      relink();
+    }
+    renderHeader();
+    renderPresets();
+    refresh(true);
+  }
+};
+})();
+
+/* ==================================================================
+   MODULE 2 — BatchNorm / LayerNorm / InstanceNorm / GroupNorm
+   ================================================================== */
+const NORM = (function(){
+
+
+/* ================================ state ================================ */
+const S = {
+  N:3, C:4, H:3, Wd:3,
+  norm:"batch", G:2,
+  epsExp:-5, aff:"init", mode:"train", mom:0.1,
+  dead:false,
+  batch:1,                       // which sample of the data distribution we are showing
+  steps:0,                       // training batches fed so far
+  focus:null,                    // {t,n,c,h,w}
+  calc:{N:null, C:null, H:null, W:null},
+};
+
+const DIMS = [
+  {id:"N",  name:"batch N",   cls:"N",  hint:"how many samples are in the batch"},
+  {id:"C",  name:"channels C", cls:"C",  hint:"num_features — one γ, β per channel"},
+  {id:"H",  name:"height H",  cls:"HW", hint:"spatial size"},
+  {id:"Wd", name:"width W",   cls:"HW", hint:"spatial size"},
+];
+
+const el = id => document.getElementById("bn_" + id);
+const eps = () => Math.pow(10, S.epsExp);
+
+let X = null, Y = null;          // Float32Array N*C*H*W
+let MU = null, VA = null;        // per (n,c): the statistic actually used
+let GRP = [], GID = null;        // pooling groups, and (n,c) -> group index
+let RM = null, RV = null;        // running_mean, running_var
+let GAM = null, BET = null;      // gamma, beta per channel
+let L = {};                      // pixel layout
+
+const idx  = (n,c,h,w) => ((n*S.C + c)*S.H + h)*S.Wd + w;
+const nc   = (n,c) => n*S.C + c;
+const calc = k => S.calc[k] === null ? S[k === "W" ? "Wd" : k] : S.calc[k];
+const calcLinked = () => Object.values(S.calc).every(v => v === null);
+
+/* ============================== the data ==============================
+   Each channel has its own fixed distribution (mean, spread). A "batch" is
+   a fresh sample from it — so running statistics converge to something real
+   as you feed more batches.
+   ====================================================================== */
+function prng(s){ let x = s>>>0; return () => (x = (x*1664525 + 1013904223)>>>0) / 4294967296; }
+function gauss(r){ const u = Math.max(r(), 1e-9); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*r()); }
+const r1 = v => Math.round(v*10)/10;
+
+function channelDist(c){
+  const r = prng(9001 + c*7919);
+  r(); r();
+  return {mu: r1(r()*18 - 8), sd: r1(0.4 + r()*2.6)};
+}
+
+function buildData(){
+  const {N,C,H,Wd} = S;
+  X = new Float32Array(N*C*H*Wd);
+  const r = prng(1234567 + S.batch*104729);
+  for(let c=0;c<C;c++){
+    const {mu, sd} = channelDist(c);
+    const s = (S.dead && c === 0) ? 0 : sd;
+    for(let n=0;n<N;n++) for(let h=0;h<H;h++) for(let w=0;w<Wd;w++)
+      X[idx(n,c,h,w)] = r1(mu + s*gauss(r));
+  }
+}
+
+function buildAffine(){
+  GAM = new Float32Array(S.C).fill(1);
+  BET = new Float32Array(S.C);
+  if(S.aff !== "learned") return;
+  const r = prng(555);
+  for(let c=0;c<S.C;c++){ GAM[c] = r1(0.4 + r()*1.6); BET[c] = r1(r()*4 - 2); }
+}
+
+function resetRunning(){
+  RM = new Float32Array(S.C);          // PyTorch initialises these to 0 and 1
+  RV = new Float32Array(S.C).fill(1);
+  S.steps = 0;
+}
+
+/* ============================ pooling groups ============================
+   The one thing that separates the four normalisation layers.
+   ====================================================================== */
+function groupKey(n,c){
+  switch(S.norm){
+    case "batch":    return "c"+c;
+    case "layer":    return "n"+n;
+    case "instance": return "n"+n+"|c"+c;
+    default:         return "n"+n+"|g"+Math.floor(c/(S.C/S.G));
+  }
+}
+function groupLabel(g){
+  const cs = [...new Set(g.members.map(m => m.c))].sort((a,b)=>a-b);
+  const ns = [...new Set(g.members.map(m => m.n))].sort((a,b)=>a-b);
+  const cpart = cs.length === S.C ? "all c" : cs.length === 1 ? "c"+cs[0] : `c${cs[0]}–${cs[cs.length-1]}`;
+  const npart = ns.length === S.N ? "all n" : "n"+ns[0];
+  return `${npart} · ${cpart}`;
+}
+
+function buildGroups(){
+  const {N,C,H,Wd} = S;
+  const map = new Map();
+  GRP = []; GID = new Int32Array(N*C);
+  for(let n=0;n<N;n++) for(let c=0;c<C;c++){
+    const key = groupKey(n,c);
+    if(!map.has(key)){ map.set(key, GRP.length); GRP.push({key, members:[]}); }
+    const gi = map.get(key);
+    GRP[gi].members.push({n,c});
+    GID[nc(n,c)] = gi;
+  }
+  for(const g of GRP){
+    let sum = 0, n = 0;
+    for(const m of g.members) for(let h=0;h<H;h++) for(let w=0;w<Wd;w++){ sum += X[idx(m.n,m.c,h,w)]; n++; }
+    const mean = sum/n;
+    let ss = 0;
+    for(const m of g.members) for(let h=0;h<H;h++) for(let w=0;w<Wd;w++){
+      const d = X[idx(m.n,m.c,h,w)] - mean; ss += d*d;
+    }
+    g.count = n;
+    g.mean  = mean;
+    g.var   = ss/n;                       // biased — this is what normalises
+    g.varU  = n > 1 ? ss/(n-1) : 0;       // unbiased — this is what running_var stores
+    g.label = groupLabel(g);
+  }
+}
+
+/* ============================== the maths ============================== */
+function normalise(){
+  const {N,C,H,Wd} = S;
+  Y = new Float32Array(N*C*H*Wd);
+  MU = new Float32Array(N*C); VA = new Float32Array(N*C);
+  const frozen = S.norm === "batch" && S.mode === "eval";
+  for(let n=0;n<N;n++) for(let c=0;c<C;c++){
+    const g = GRP[GID[nc(n,c)]];
+    const mu = frozen ? RM[c] : g.mean;
+    const va = frozen ? RV[c] : g.var;
+    MU[nc(n,c)] = mu; VA[nc(n,c)] = va;
+    const inv = 1/Math.sqrt(va + eps());
+    for(let h=0;h<H;h++) for(let w=0;w<Wd;w++){
+      const i = idx(n,c,h,w);
+      Y[i] = GAM[c]*(X[i] - mu)*inv + BET[c];
+    }
+  }
+}
+
+// one training step: a fresh batch moves the running estimates towards the truth
+function feedBatch(){
+  S.batch++;
+  buildData(); buildGroups();
+  if(S.mode === "train" && S.norm === "batch"){
+    const m = S.mom;
+    for(let c=0;c<S.C;c++){
+      const g = GRP[GID[nc(0,c)]];
+      RM[c] = (1-m)*RM[c] + m*g.mean;
+      RV[c] = (1-m)*RV[c] + m*g.varU;      // note: unbiased here, biased above
+    }
+    S.steps++;
+  }
+  refresh();
+}
+
+/* ============================== rendering ============================== */
+const dark = () => matchMedia("(prefers-color-scheme: dark)").matches;
+function palette(){
+  const d = dark();
+  return {
+    line:  d ? "#2a323d" : "#d6dde5",
+    text:  d ? "#e6edf3" : "#1c2128",
+    dim:   d ? "#8b949e" : "#57606a",
+    dim2:  d ? "#6e7681" : "#8c959f",
+    panel: d ? "#161b22" : "#ffffff",
+    veil:  d ? "rgba(22,27,34,.80)" : "rgba(255,255,255,.80)",
+    pos:   d ? [240,161,50]  : [188,108,0],
+    neg:   d ? [74,163,255]  : [9,105,218],
+    accent:d ? "#4aa3ff" : "#0969da",
+    amber: d ? "#f0a132" : "#bc6c00",
+  };
+}
+function tint(v, max, P){
+  const t = Math.min(1, Math.abs(v)/(max || 1));
+  const rgb = v >= 0 ? P.pos : P.neg;
+  return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${0.10 + 0.80*t})`;
+}
+const fmt = (v, d=2) => {
+  if(!isFinite(v)) return "∞";
+  if(Math.abs(v) < 5e-3) v = 0;
+  const s = Math.abs(v - Math.round(v)) < 1e-9 ? String(Math.round(v)) : v.toFixed(d);
+  return s === "-0" ? "0" : s;
+};
+
+function fitCanvas(cv, w, h){
+  const dpr = devicePixelRatio || 1;
+  cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+  cv.style.width = w+"px"; cv.style.height = h+"px";
+  const g = cv.getContext("2d");
+  g.setTransform(dpr,0,0,dpr,0,0);
+  return g;
+}
+
+const HEAD = 17, TOPLBL = 13, GUT = 24;
+
+function layout(){
+  const avail = Math.max(360, (el("vizwrap").clientWidth || 900) - 2);
+  const {N,C,H,Wd} = S;
+  let best = null;
+  for(const side of [true,false]){
+    for(let cs=34; cs>=3; cs--){
+      const g  = Math.max(3, Math.round(cs*0.4));
+      const tw = GUT + C*Wd*cs + (C-1)*g;
+      const th = HEAD + TOPLBL + N*H*cs + (N-1)*g;
+      const w  = side ? tw*2 + 54 : tw;
+      if(w <= avail){ best = {cs, g, tw, th, side}; break; }
+    }
+    if(best) break;
+  }
+  if(!best){
+    const cs = 3, g = 3;
+    best = {cs, g, tw: GUT + C*Wd*cs + (C-1)*g, th: HEAD + TOPLBL + N*H*cs + (N-1)*g, side:false};
+  }
+  best.ax = 0; best.ay = 0;
+  best.bx = best.side ? best.tw + 54 : 0;
+  best.by = best.side ? 0 : best.th + 26;
+  L = best;
+  L.w = best.side ? best.tw*2 + 54 : best.tw;
+  L.h = best.side ? best.th : best.th*2 + 26;
+}
+
+function blockXY(ox, oy, n, c){
+  return {x: ox + GUT + c*(S.Wd*L.cs + L.g), y: oy + HEAD + TOPLBL + n*(S.H*L.cs + L.g)};
+}
+
+function drawTensor(g, T, ox, oy, title, max, P, live){
+  const {N,C,H,Wd} = S, cs = L.cs;
+  g.fillStyle = P.dim; g.font = "600 11px ui-sans-serif,system-ui";
+  g.textAlign = "left"; g.textBaseline = "alphabetic";
+  g.fillText(title, ox, oy + 11);
+
+  g.font = "10px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim2;
+  for(let c=0;c<C;c++){
+    const b = blockXY(ox, oy, 0, c);
+    if(Wd*cs > 14) g.fillText("c"+c, b.x, oy + HEAD + TOPLBL - 3);
+  }
+  g.textAlign = "right";
+  for(let n=0;n<N;n++){
+    const b = blockXY(ox, oy, n, 0);
+    if(H*cs > 11) g.fillText("n"+n, ox + GUT - 5, b.y + H*cs/2 + 3);
+  }
+  g.textAlign = "center"; g.textBaseline = "middle";
+
+  const showNums = cs >= 17;
+  for(let n=0;n<N;n++) for(let c=0;c<C;c++){
+    const b = blockXY(ox, oy, n, c);
+    const on = !live || live.has(nc(n,c));
+    for(let h=0;h<H;h++) for(let w=0;w<Wd;w++){
+      const v = T[idx(n,c,h,w)];
+      const x = b.x + w*cs, y = b.y + h*cs;
+      g.fillStyle = P.panel; g.fillRect(x, y, cs, cs);
+      g.fillStyle = tint(v, max, P);
+      g.globalAlpha = on ? 1 : 0.16;
+      g.fillRect(x, y, cs, cs);
+      g.globalAlpha = 1;
+      if(showNums){
+        const txt = fmt(v, 1);
+        g.fillStyle = on ? P.text : P.dim2;
+        g.globalAlpha = on ? 1 : 0.45;
+        g.font = `600 ${Math.min(11, Math.max(6, Math.floor(cs*0.95/Math.max(txt.length, 1.7))))}px ui-monospace,Menlo,monospace`;
+        g.fillText(txt, x + cs/2, y + cs/2 + 0.5);
+        g.globalAlpha = 1;
+      }
+    }
+    g.strokeStyle = on ? P.accent : P.line;
+    g.lineWidth = on ? 1.6 : 1;
+    g.globalAlpha = on ? 1 : 0.5;
+    g.strokeRect(b.x - .5, b.y - .5, Wd*cs + 1, H*cs + 1);
+    g.globalAlpha = 1;
+  }
+}
+
+function paint(){
+  const P = palette();
+  layout();
+  const g = fitCanvas(el("viz"), L.w, L.h);
+  g.clearRect(0,0,L.w,L.h);
+
+  let mx = 0, my = 0;
+  for(let i=0;i<X.length;i++){ mx = Math.max(mx, Math.abs(X[i])); my = Math.max(my, Math.abs(Y[i])); }
+
+  const f = S.focus;
+  const live = f ? new Set(GRP[GID[nc(f.n,f.c)]].members.map(m => nc(m.n,m.c))) : null;
+
+  drawTensor(g, X, L.ax, L.ay, `x — input (${S.N}, ${S.C}, ${S.H}, ${S.Wd})`, mx, P, live);
+  drawTensor(g, Y, L.bx, L.by, `y — normalised`, my, P, live);
+
+  // the arrow between the two tensors
+  g.fillStyle = P.dim; g.font = "11px ui-sans-serif,system-ui";
+  g.textAlign = "center"; g.textBaseline = "middle";
+  if(L.side){
+    const x = L.tw + 27, y = L.ay + L.th/2;
+    g.fillText("→", x, y - 8);
+    g.font = "10px ui-monospace,Menlo,monospace";
+    g.fillText("γ·x̂+β", x, y + 8);
+  } else {
+    g.fillText("↓  γ·x̂ + β", L.tw/2, L.th + 13);
+  }
+
+  // ring the hovered cell
+  if(f){
+    const ox = f.t === "x" ? L.ax : L.bx, oy = f.t === "x" ? L.ay : L.by;
+    const b = blockXY(ox, oy, f.n, f.c);
+    g.strokeStyle = P.amber; g.lineWidth = 2;
+    g.strokeRect(b.x + f.w*L.cs - 1, b.y + f.h*L.cs - 1, L.cs + 2, L.cs + 2);
+  }
+  renderMath();
+  paintDist(P, mx, my);
+}
+
+/* --------- every value of every group on one axis, before and after --------- */
+const DROWS = 12;
+function paintDist(P, mx, my){
+  const shown = Math.min(GRP.length, DROWS);
+  const avail = Math.max(320, (el("distwrap").clientWidth || 700) - 2);
+  const gut = 62, gap = 22;
+  const pw = Math.floor((avail - gut - gap)/2);
+  const rh = 15, top = 20;
+  const h = top + shown*rh + 10;
+  const g = fitCanvas(el("dist"), avail, h);
+  g.clearRect(0,0,avail,h);
+
+  const spanX = Math.max(mx, 1e-6), spanY = Math.max(my, 1e-6);
+  const px = (v, x0, span) => x0 + pw/2 + (v/span)*(pw/2 - 6);
+
+  g.font = "10px ui-sans-serif,system-ui"; g.fillStyle = P.dim2;
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillText(`before  (±${fmt(spanX,1)})`, gut + pw/2, 9);
+  g.fillText(`after  (±${fmt(spanY,1)})`, gut + pw + gap + pw/2, 9);
+
+  const fi = S.focus ? GID[nc(S.focus.n, S.focus.c)] : -1;
+  for(let i=0;i<shown;i++){
+    const grp = GRP[i], y = top + i*rh + rh/2;
+    const on = i === fi || fi < 0;
+    g.textAlign = "right"; g.fillStyle = on ? P.text : P.dim2;
+    g.globalAlpha = on ? 1 : .45;
+    g.font = "10px ui-monospace,Menlo,monospace";
+    g.fillText(grp.label, gut - 6, y);
+
+    [[0, X, spanX, P.pos], [1, Y, spanY, P.neg]].forEach(([side, T, span, rgb]) => {
+      const x0 = gut + side*(pw + gap);
+      g.strokeStyle = P.line; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(x0, y + 5.5); g.lineTo(x0 + pw, y + 5.5); g.stroke();
+      g.strokeStyle = P.dim2;                              // the zero mark
+      g.beginPath(); g.moveTo(px(0, x0, span), y - 5); g.lineTo(px(0, x0, span), y + 5.5); g.stroke();
+      g.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${on ? .7 : .2})`;
+      for(const m of grp.members) for(let hh=0;hh<S.H;hh++) for(let ww=0;ww<S.Wd;ww++){
+        const v = T[idx(m.n, m.c, hh, ww)];
+        g.beginPath(); g.arc(px(v, x0, span), y, 2.1, 0, 6.2832); g.fill();
+      }
+    });
+    g.globalAlpha = 1;
+  }
+
+  const b = S.aff === "learned";
+  el("distnote").innerHTML =
+    `Each dot is one number of the tensor. Left: the raw values, one row per pooling group — the groups sit at
+     different centres and have different spreads. Right: the same numbers after the layer${
+       b ? `, rescaled by the learned <span class="pv">γ</span>, <span class="pv">β</span>` : ""}.
+     ${b ? "Turn affine off" : "With affine off or at init"} every row is centred on 0 with variance 1 —
+     that <em>is</em> the whole operation.
+     ${GRP.length > DROWS ? `<br>Showing the first ${DROWS} of ${GRP.length} groups.` : ""}`;
+}
+
+/* ======================= the formula, written out ======================= */
+const xv = v => `<span class="xv">${fmt(v)}</span>`;
+const sv = v => `<span class="sv">${fmt(v)}</span>`;
+const pv = v => `<span class="pv">${fmt(v)}</span>`;
+function mrow(label, html){ return `<div class="mrow"><span class="mlbl">${label}</span><span class="mval">${html}</span></div>`; }
+
+function groupWhy(g){
+  const {N,C,H,Wd} = S;
+  switch(S.norm){
+    case "batch":
+      return `channel <b>${g.members[0].c}</b> — one mean for the whole channel, pooling
+              <b>N·H·W = ${N}·${H}·${Wd} = ${g.count}</b> values across every sample in the batch.`;
+    case "layer":
+      return `sample <b>${g.members[0].n}</b> — one mean for that sample's entire feature stack, pooling
+              <b>C·H·W = ${C}·${H}·${Wd} = ${g.count}</b> values. No other sample is involved.`;
+    case "instance":
+      return `sample <b>${g.members[0].n}</b>, channel <b>${g.members[0].c}</b> — one mean per feature map,
+              pooling <b>H·W = ${H}·${Wd} = ${g.count}</b> values.`;
+    default: {
+      const cs = g.members.map(m => m.c);
+      return `sample <b>${g.members[0].n}</b>, channels <b>${Math.min(...cs)}…${Math.max(...cs)}</b> — one mean per
+              group of ${S.C/S.G} channels, pooling <b>(C/G)·H·W = ${g.count}</b> values.`;
+    }
+  }
+}
+
+function renderMath(){
+  const f = S.focus;
+  if(!f){ el("readout").innerHTML = `<span style="color:var(--dim2)">Hover a cell to see the arithmetic that produced it.</span>`; return; }
+  const {n,c,h,w} = f;
+  const g  = GRP[GID[nc(n,c)]];
+  const mu = MU[nc(n,c)], va = VA[nc(n,c)];
+  const x  = X[idx(n,c,h,w)], y = Y[idx(n,c,h,w)];
+  const sd = Math.sqrt(va + eps());
+  const frozen = S.norm === "batch" && S.mode === "eval";
+  const src = frozen ? "running_" : "";
+  const E = S.epsExp === 0 ? "1" : `1e${S.epsExp}`;
+
+  el("readout").innerHTML =
+    mrow("this cell", `<b>y[${n}][${c}][${h}][${w}]</b>`) +
+    mrow("formula",
+      `<span class="pv">γ[${c}]</span> · ( <span class="xv">x[${n}][${c}][${h}][${w}]</span> −
+       <span class="sv">${src}μ[${c}]</span> ) / √( <span class="sv">${src}σ²[${c}]</span> + ε )
+       + <span class="pv">β[${c}]</span>`) +
+    mrow("values",
+      `${pv(GAM[c])} · ( ${xv(x)} − ${sv(mu)} ) / √( ${sv(va)} + ${E} ) + ${pv(BET[c])}`) +
+    mrow("maths",
+      `${pv(GAM[c])} · ${fmt(x-mu)} / ${fmt(sd, 3)} + ${pv(BET[c])}
+       &nbsp;=&nbsp; <span class="res">${fmt(y)}</span>`) +
+    mrow(frozen ? "eval" : "why these",
+      frozen
+        ? `<span style="color:var(--dim)">eval() ignores this batch entirely — <span class="sv">running_μ</span> and
+           <span class="sv">running_σ²</span> come from the ${S.steps} batch${S.steps===1?"":"es"} fed so far.</span>`
+        : `<span style="color:var(--dim)">${groupWhy(g)}</span>`);
+}
+
+/* ============================== side panels ============================== */
+function counts(N,C,H,W){
+  switch(S.norm){
+    case "batch":    return {stats:C,   pool:N*H*W,       expr:"N·H·W"};
+    case "layer":    return {stats:N,   pool:C*H*W,       expr:"C·H·W"};
+    case "instance": return {stats:N*C, pool:H*W,         expr:"H·W"};
+    default:         return {stats:N*S.G, pool:(C/S.G)*H*W, expr:"(C/G)·H·W"};
+  }
+}
+const th = v => v.toLocaleString("en-US");
+
+function renderFormula(){
+  const N = calc("N"), C = calc("C"), H = calc("H"), W = calc("W");
+  const q = counts(N,C,H,W);
+  const learn = S.aff === "off" ? 0 : (S.norm === "layer" ? 2*C*H*W : 2*C);
+  const buf   = S.norm === "batch" ? 2*C : 0;
+  const name  = ({batch:`BatchNorm2d(${C})`, layer:`LayerNorm([${C}, ${H}, ${W}])`,
+                  instance:`InstanceNorm2d(${C})`, group:`GroupNorm(${S.G}, ${C})`})[S.norm];
+
+  el("formula").innerHTML =
+    `<span class="lbl">pytorch</span>${name}
+     <span class="lbl">shape</span>(<b>${N}</b>, <b>${C}</b>, <b>${H}</b>, <b>${W}</b>) →
+       (<b>${N}</b>, <b>${C}</b>, <b>${H}</b>, <b>${W}</b>) <span style="color:var(--dim2)">unchanged</span>
+     <span class="lbl">statistics</span><span class="big">${th(q.stats)}</span> pairs of (μ, σ²)
+     <span class="lbl">each pools</span>${q.expr} = <b>${th(q.pool)}</b> values
+     <span class="lbl">learnable</span>${learn ? `γ, β = ${th(learn)} floats` : "none (affine off)"}
+     <span class="lbl">buffers</span>${buf ? `running_mean, running_var = ${th(buf)} floats` : "none"}`;
+
+  const notes = [];
+  if(S.norm === "batch")
+    notes.push(`Normalisation never changes the shape — the interesting number is <b>${th(q.pool)}</b>,
+                how many values each mean is estimated from. Halve the batch and that estimate gets noisier;
+                that is the whole reason BatchNorm struggles with small batches.`);
+  else
+    notes.push(`Every statistic is computed inside one sample, so the batch size does not enter at all —
+                each mean still pools <b>${th(q.pool)}</b> values whether N is 1 or 1000.`);
+  if(S.norm === "layer")
+    notes.push(`PyTorch's <code>LayerNorm</code> gives γ and β one entry per element of
+                <code>normalized_shape</code>, hence ${th(learn)} and not ${th(2*C)}. This page applies
+                per-channel γ, β for all four layers so the only thing that changes is the pooling.`);
+  if(!calcLinked())
+    notes.push(`<span style="color:var(--dim2)">The tensor drawn on the left is
+                ${S.N}×${S.C}×${S.H}×${S.Wd} — these numbers are for the shape you typed.
+                <em>↺ drawn</em> puts them back in sync.</span>`);
+  el("shapenote").innerHTML = notes.join("<br><br>");
+}
+
+function renderStatTable(){
+  const fi = S.focus ? GID[nc(S.focus.n, S.focus.c)] : -1;
+  const showRun = S.norm === "batch";
+  const rows = GRP.slice(0, 16).map((g,i) => `
+    <tr class="${i===fi?'on':''}">
+      <td>${g.label}</td><td>${g.count}</td><td>${fmt(g.mean)}</td><td>${fmt(g.var)}</td>
+      ${showRun ? `<td>${fmt(RM[g.members[0].c])}</td><td>${fmt(RV[g.members[0].c])}</td>` : ""}
+    </tr>`).join("");
+  el("stattable").innerHTML = `
+    <table class="stats">
+      <tr><th>group</th><th>n</th><th>μ</th><th>σ²</th>
+        ${showRun ? `<th>run μ</th><th>run σ²</th>` : ""}</tr>
+      ${rows}
+    </table>
+    ${GRP.length > 16 ? `<div class="note">…and ${GRP.length-16} more.</div>` : ""}
+    <div class="note">${showRun
+      ? `<b>μ, σ²</b> are this batch's; <b>run μ, run σ²</b> are the running estimates after
+         ${S.steps} training batch${S.steps===1?"":"es"}. <code>train()</code> uses the first pair,
+         <code>eval()</code> the second.`
+      : `There are no running statistics — this layer recomputes μ and σ² from whatever tensor it is given,
+         so <code>train()</code> and <code>eval()</code> behave identically.`}</div>`;
+}
+
+function renderDiag(){
+  const {N,C,H,Wd} = S;
+  const q = counts(N,C,H,Wd);
+  const batchDep = S.norm === "batch";
+  const out = [];
+
+  out.push(`<div style="margin-bottom:7px">
+    <span class="flag ${batchDep?'bad':'ok'}">${batchDep?'batch-dependent':'per-sample'}</span>
+    <span style="color:var(--dim);font-size:11.5px;margin-left:7px">${q.stats} statistic${q.stats===1?"":"s"},
+      ${q.pool} value${q.pool===1?"":"s"} each</span></div>`);
+
+  const notes = [];
+  if(batchDep){
+    notes.push(`Each output depends on the <em>other samples in the batch</em>. That is why the layer has to
+                keep running statistics for inference, and why <code>train()</code> and <code>eval()</code>
+                give different numbers for the same input.`);
+    if(N*H*Wd === 1)
+      notes.push(`<span class="err">N·H·W = 1 — PyTorch raises "Expected more than 1 value per channel when
+                  training".</span> With a single value per channel the variance is 0 and the output is
+                  entirely β.`);
+    else if(q.pool < 8)
+      notes.push(`Only ${q.pool} values per statistic: the estimates are noisy, and the layer effectively
+                  injects that noise into training. This is the small-batch failure mode that GroupNorm was
+                  designed for.`);
+  } else {
+    notes.push(`Nothing crosses the batch dimension, so inference on a single sample gives exactly the same
+                answer as inference in a batch of 64. No running statistics, no train/eval divergence.`);
+  }
+
+  if(S.norm === "group"){
+    if(S.G === 1)      notes.push(`<b>G = 1</b> pools all channels together — that is LayerNorm over (C, H, W).`);
+    else if(S.G === C) notes.push(`<b>G = C</b> gives every channel its own group — that is InstanceNorm.`);
+    else               notes.push(`GroupNorm interpolates: <b>G = 1</b> is LayerNorm, <b>G = C</b> is InstanceNorm.`);
+  }
+
+  const zero = GRP.find(g => g.var < 1e-9);
+  if(zero)
+    notes.push(`Group <b>${zero.label}</b> has σ² = 0, so x − μ = 0 for every one of its values and the output is
+                exactly β no matter what ε is. ε only keeps the division finite —
+                <b>1/√(0 + ${S.epsExp===0?"1":"1e"+S.epsExp})</b> = ${fmt(1/Math.sqrt(eps()),1)}.`);
+  else if(S.epsExp >= -2)
+    notes.push(`ε = ${S.epsExp===0?"1":"1e"+S.epsExp} is large enough to bite: it inflates the denominator, so
+                the output variance lands below 1. At the default 1e-5 it is invisible.`);
+
+  if(S.aff === "learned")
+    notes.push(`γ and β are free parameters. They can undo the normalisation completely (γ = σ, β = μ), which is
+                exactly why adding the layer cannot make the network less expressive.`);
+
+  out.push(`<div class="note" style="margin-top:0">${notes.join("<br><br>")}</div>`);
+  el("diag").innerHTML = out.join("");
+}
+
+/* ============================== controls ============================== */
+function buildControls(){
+  el("ctrls").innerHTML = DIMS.map(P => `
+    <div class="ctrl">
+      <label for="bn_r_${P.id}"><span class="${P.cls}">${P.name}</span><b id="bn_v_${P.id}"></b></label>
+      <input type="range" id="bn_r_${P.id}" min="1" max="10" step="1">
+      <div class="hint">${P.hint}</div>
+    </div>`).join("");
+
+  DIMS.forEach(P => el("r_"+P.id).addEventListener("input", e => {
+    S[P.id] = +e.target.value;
+    relink(); fixGroups(); S.focus = null;
+    if(P.id === "C") resetRunning();
+    refresh(true);
+  }));
+
+  const seg = (id, attr, fn) => document.querySelectorAll(`#bn_${id} button`).forEach(b =>
+    b.addEventListener("click", () => { fn(b.dataset[attr]); }));
+
+  seg("normseg", "norm", v => { S.norm = v; fixGroups(); S.focus = null; refresh(); });
+  seg("epsseg",  "eps",  v => { S.epsExp = +v; refresh(); });
+  seg("affseg",  "aff",  v => { S.aff = v; refresh(true); });
+  seg("modeseg", "mode", v => { S.mode = v; refresh(); });
+  seg("momseg",  "mom",  v => { S.mom = +v; refresh(); });
+
+  el("feed").addEventListener("click", feedBatch);
+  el("reset").addEventListener("click", () => { resetRunning(); refresh(); });
+  el("dead").addEventListener("change", e => { S.dead = e.target.checked; refresh(true); });
+
+  document.querySelectorAll("#view-norm [data-preset]").forEach(b => b.addEventListener("click", () => {
+    Object.assign(S, JSON.parse(b.dataset.preset));
+    relink(); fixGroups(); S.focus = null; resetRunning(); refresh(true);
+  }));
+
+  ["dN","dC","dH","dW"].forEach(id => el(id).addEventListener("change", () =>
+    setCalc(+el("dN").value, +el("dC").value, +el("dH").value, +el("dW").value)));
+  el("dsync").addEventListener("click", () => { relink(); refresh(); });
+}
+
+function relink(){ S.calc = {N:null, C:null, H:null, W:null}; }
+
+// dims small enough to draw are applied to the tensor; anything else lives in
+// the calculator alone.
+function setCalc(N, C, H, W){
+  const cl = v => Math.max(1, Math.min(8192, Math.round(v) || 1));
+  [N,C,H,W] = [cl(N), cl(C), cl(H), cl(W)];
+  if([N,C,H,W].every(v => v <= 10)){
+    relink();
+    Object.assign(S, {N, C, H, Wd:W});
+    fixGroups(); S.focus = null; resetRunning(); refresh(true);
+  } else {
+    S.calc = {N, C, H, W};
+    fixGroups(); refresh();
+  }
+}
+
+const divisors = n => Array.from({length:n}, (_,i) => i+1).filter(d => n % d === 0);
+function fixGroups(){
+  const ds = divisors(calc("C"));
+  if(!ds.includes(S.G)) S.G = ds.reduce((a,b) => Math.abs(b-S.G) < Math.abs(a-S.G) ? b : a, ds[0]);
+}
+
+function syncControls(){
+  DIMS.forEach(P => { el("r_"+P.id).value = S[P.id]; el("v_"+P.id).textContent = S[P.id]; });
+  const on = (id, attr, val) => document.querySelectorAll(`#bn_${id} button`).forEach(b =>
+    b.classList.toggle("on", b.dataset[attr] === String(val)));
+  on("normseg","norm",S.norm); on("epsseg","eps",S.epsExp);
+  on("affseg","aff",S.aff);    on("modeseg","mode",S.mode); on("momseg","mom",S.mom);
+
+  el("groupwrap").style.display = S.norm === "group" ? "" : "none";
+  el("groupseg").innerHTML = divisors(calc("C")).map(d =>
+    `<button data-g="${d}" class="${d===S.G?'on':''}">${d}</button>`).join("");
+  document.querySelectorAll("#bn_groupseg button").forEach(b =>
+    b.addEventListener("click", () => { S.G = +b.dataset.g; S.focus = null; refresh(); }));
+
+  el("normhint").innerHTML = ({
+    batch:    `<code>nn.BatchNorm2d</code> — one μ, σ² per <b>channel</b>, pooled over the batch and all pixels.`,
+    layer:    `<code>nn.LayerNorm</code> — one μ, σ² per <b>sample</b>, pooled over channels and pixels.`,
+    instance: `<code>nn.InstanceNorm2d</code> — one μ, σ² per <b>feature map</b>, pooled over pixels only.`,
+    group:    `<code>nn.GroupNorm</code> — one μ, σ² per <b>group of channels</b>, inside one sample.`,
+  })[S.norm];
+
+  el("affhint").innerHTML = ({
+    off:     `y is exactly the normalised x̂. PyTorch calls this <code>affine=False</code>.`,
+    init:    `γ = 1, β = 0 — how PyTorch initialises them, so the layer starts as pure normalisation.`,
+    learned: `Arbitrary trained values: the layer can now shift and stretch each channel back out again.`,
+  })[S.aff];
+
+  const isBN = S.norm === "batch";
+  el("runwrap").style.display = isBN ? "" : "none";
+  document.querySelectorAll("#bn_modeseg button").forEach(b => b.disabled = !isBN && b.dataset.mode === "eval");
+  el("runhint").innerHTML = !isBN ? "" : S.mode === "train"
+    ? `Each batch nudges the estimates: <span class="mono">running = (1−m)·running + m·batch</span>.
+       ${S.steps} fed so far.`
+    : `<b>eval() freezes them.</b> Feeding batches no longer changes running_mean or running_var — that is the
+       point, inference must not depend on whatever else is in the batch.`;
+  el("dead").checked = S.dead;
+
+  const c = S.calc;
+  el("dN").value = calc("N"); el("dC").value = calc("C");
+  el("dH").value = calc("H"); el("dW").value = calc("W");
+  el("dsync").style.display = calcLinked() ? "none" : "";
+}
+
+/* ============================== interaction ============================== */
+function hit(ev){
+  const rect = el("viz").getBoundingClientRect();
+  const x = ev.clientX - rect.left, y = ev.clientY - rect.top;
+  const cs = L.cs, bw = S.Wd*cs, bh = S.H*cs;
+  for(const [t, ox, oy] of [["x", L.ax, L.ay], ["y", L.bx, L.by]]){
+    const lx = x - (ox + GUT), ly = y - (oy + HEAD + TOPLBL);
+    if(lx < 0 || ly < 0) continue;
+    const c = Math.floor(lx/(bw + L.g)), n = Math.floor(ly/(bh + L.g));
+    if(c >= S.C || n >= S.N) continue;
+    const ix = lx - c*(bw + L.g), iy = ly - n*(bh + L.g);
+    if(ix >= bw || iy >= bh) continue;
+    return {t, n, c, h: Math.floor(iy/cs), w: Math.floor(ix/cs)};
+  }
+  return null;
+}
+
+function wire(){
+  el("viz").addEventListener("mousemove", e => {
+    const h = hit(e);
+    if(!h) return;                                  // between blocks: keep the last reading
+    const f = S.focus;
+    if(f && f.t===h.t && f.n===h.n && f.c===h.c && f.h===h.h && f.w===h.w) return;
+    S.focus = h; paint(); renderStatTable();
+  });
+  const hidden = () => document.getElementById("view-norm").classList.contains("hidden");
+  let t; addEventListener("resize", () => { clearTimeout(t); t = setTimeout(() => { if(!hidden()) paint(); }, 120); });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if(!hidden()) refresh(); });
+}
+
+/* ================================ main ================================ */
+// open on the channel whose mean is furthest from zero — the one where
+// subtracting μ visibly does something
+function bestExample(){
+  let best = 0, score = -1;
+  for(let i=0;i<GRP.length;i++){
+    const s = Math.abs(GRP[i].mean);
+    if(s > score){ score = s; best = i; }
+  }
+  const m = GRP[best].members[0];
+  return {t:"x", n:m.n, c:m.c, h:0, w:0};
+}
+
+function refresh(rebuild){
+  if(!RM || RM.length !== S.C) resetRunning();
+  if(rebuild || !X || X.length !== S.N*S.C*S.H*S.Wd) buildData();
+  buildAffine();
+  buildGroups();
+  normalise();
+  if(S.focus && (S.focus.n >= S.N || S.focus.c >= S.C || S.focus.h >= S.H || S.focus.w >= S.Wd)) S.focus = null;
+  if(!S.focus) S.focus = bestExample();
+  syncControls();
+  renderFormula();
+  renderStatTable();
+  renderDiag();
+  paint();
+}
+
+let started = false;
+return {
+  show(){
+    if(!started){ started = true; buildControls(); wire(); refresh(true); }
+    else refresh();
+  }
+};
+})();
+
+/* ==================================================================
+   The menu — Conv2d and ConvTranspose2d are the same page in two
+   directions, Normalisation is its own.
+   ================================================================== */
+const TABS = document.getElementById("tabs");
+const VIEW_CONV = document.getElementById("view-conv");
+const VIEW_NORM = document.getElementById("view-norm");
+
+function setView(v){
+  VIEW_CONV.classList.toggle("hidden", v === "norm");
+  VIEW_NORM.classList.toggle("hidden", v !== "norm");
+  TABS.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.view === v));
+  if(v === "norm") NORM.show(); else CONV.show(v);
+  try{ history.replaceState(null, "", "#"+v); }catch(e){}
+}
+TABS.querySelectorAll("button").forEach(b =>
+  b.addEventListener("click", () => setView(b.dataset.view)));
+addEventListener("hashchange", () => {
+  const h = location.hash.slice(1);
+  if(["conv","convT","norm"].includes(h)) setView(h);
+});
+
+const start = location.hash.slice(1);
+setView(["conv","convT","norm"].includes(start) ? start : "conv");
+</script>
+</body>
+</html>
