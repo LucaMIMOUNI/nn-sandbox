@@ -1,0 +1,243 @@
+<div class="topbar">
+  <div class="brand">NN Sandbox<span>one layer at a time, number by number</span></div>
+  <div class="tabs" id="tabs">
+    <button data-view="conv">Conv2d</button>
+    <button data-view="convT">ConvTranspose2d</button>
+    <button data-view="norm">Normalisation</button>
+  </div>
+</div>
+
+<!-- ================================================================
+     VIEW 1 + 2 — Conv2d and ConvTranspose2d share this whole page,
+     the only difference is which direction the arithmetic runs.
+     ================================================================ -->
+<section class="view" id="view-conv">
+  <div class="hero">
+    <h1 id="cv_title"></h1>
+    <p class="sub" id="cv_sub"></p>
+  </div>
+
+  <div class="app">
+
+    <!-- ============ LEFT: parameters ============ -->
+    <div class="col-left side">
+      <div class="panel">
+        <h2>Parameters</h2>
+        <div id="ctrls"></div>
+
+        <div class="divider"></div>
+        <h2>Kernel weights</h2>
+        <div class="seg wide" id="kernelseg">
+          <button data-kernel="box">box</button>
+          <button data-kernel="gauss">gauss</button>
+          <button data-kernel="edge">edge</button>
+          <button data-kernel="rand">random</button>
+        </div>
+        <div class="hint" id="kernelhint" style="margin-top:5px"></div>
+
+        <div class="divider"></div>
+        <label class="chk"><input type="checkbox" id="showcounts"> <span id="countlabel"></span></label>
+        <div class="hint" id="counthint" style="margin-top:4px"></div>
+        <div class="hint" id="countscale" style="margin-top:7px;line-height:2"></div>
+
+        <div class="divider"></div>
+        <h2 id="presethead">Presets</h2>
+        <div class="stack-btns" id="presets"></div>
+      </div>
+    </div>
+
+    <!-- ============ CENTRE: the image ============ -->
+    <div class="col-mid">
+      <div class="panel" id="stage">
+        <div class="modebar">
+          <div class="seg" id="modeseg">
+            <button data-mode="matrix">Matrix</button>
+            <button data-mode="mnist">MNIST digit</button>
+            <button data-mode="photo">Photo</button>
+          </div>
+          <div class="subbar" id="subbar"></div>
+        </div>
+
+        <div id="vizwrap"><canvas id="viz"></canvas></div>
+        <div class="hint" id="vizcap" style="margin-top:7px;min-height:16px;line-height:1.5"></div>
+
+        <div class="stepbar">
+          <button id="prev" title="previous cell">◀</button>
+          <span id="sellabel" class="mono"></span>
+          <button id="next" title="next cell">▶</button>
+          <button id="play">▶ play</button>
+          <label class="chk"><input type="checkbox" id="prog"> build up progressively</label>
+          <span class="hint" id="proghint" style="margin:0"></span>
+        </div>
+
+        <div id="readout"></div>
+        <div class="legend" id="legend"></div>
+        <div class="credit" id="credit"></div>
+      </div>
+    </div>
+
+    <!-- ============ RIGHT: shape + diagnostics ============ -->
+    <div class="col-right side">
+      <div class="panel">
+        <h2>Output shape</h2>
+        <div class="dims">
+          <span>input</span>
+          <input type="number" id="ch" min="1" max="4096" step="1" title="input height — any value, it does not have to be drawable">
+          <span>×</span>
+          <input type="number" id="cw" min="1" max="4096" step="1" title="input width">
+          <button id="csync" title="bring the calculator back to the size of the grids">↺ grid</button>
+        </div>
+        <div class="formula" id="formula"></div>
+        <div class="note" id="shapenote"></div>
+      </div>
+      <div class="panel">
+        <h2>Diagnostics</h2>
+        <div id="diag"></div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ================================================================
+     VIEW 3 — normalisation layers
+     ================================================================ -->
+<section class="view hidden" id="view-norm">
+<div class="hero">
+  <h1>BatchNorm, and what it averages over</h1>
+  <p class="sub">
+    Every normalisation layer does the same arithmetic — subtract a mean, divide by a standard deviation,
+    then rescale with <span class="pv">γ</span> and <span class="pv">β</span>. The only thing that changes
+    between BatchNorm, LayerNorm, InstanceNorm and GroupNorm is <b>which numbers get pooled into one mean</b>.
+    <b>Hover any cell</b>: everything outside its pooling group is greyed out, and the maths is written underneath.
+  </p>
+</div>
+
+<div class="app">
+
+  <!-- ============ LEFT: parameters ============ -->
+  <div class="col-left side">
+    <div class="panel">
+      <h2>Tensor</h2>
+      <div id="bn_ctrls"></div>
+
+      <div class="divider"></div>
+      <h2>Normalisation</h2>
+      <div class="seg wide" id="bn_normseg">
+        <button data-norm="batch">Batch</button>
+        <button data-norm="layer">Layer</button>
+        <button data-norm="instance">Instance</button>
+        <button data-norm="group">Group</button>
+      </div>
+      <div class="hint" id="bn_normhint" style="margin-top:5px"></div>
+      <div id="bn_groupwrap" style="margin-top:8px">
+        <label style="font-size:12px;color:var(--dim)">num_groups</label>
+        <div class="seg wide" id="bn_groupseg" style="margin-top:3px"></div>
+      </div>
+
+      <div class="divider"></div>
+      <h2>eps</h2>
+      <div class="seg wide" id="bn_epsseg">
+        <button data-eps="-8">1e-8</button>
+        <button data-eps="-5">1e-5</button>
+        <button data-eps="-2">1e-2</button>
+        <button data-eps="0">1</button>
+      </div>
+      <div class="hint" style="margin-top:5px">Guards the division when a group has (almost) no variance.
+        Tick <em>constant channel</em> below to make it matter.</div>
+
+      <div class="divider"></div>
+      <h2>affine — γ, β</h2>
+      <div class="seg wide" id="bn_affseg">
+        <button data-aff="off">off</button>
+        <button data-aff="init">γ=1, β=0</button>
+        <button data-aff="learned">learned</button>
+      </div>
+      <div class="hint" id="bn_affhint" style="margin-top:5px"></div>
+
+      <div class="divider"></div>
+      <h2>Mode</h2>
+      <div class="seg wide" id="bn_modeseg">
+        <button data-mode="train">train()</button>
+        <button data-mode="eval">eval()</button>
+      </div>
+      <div id="bn_runwrap">
+        <div class="row" style="margin-top:8px">
+          <span style="font-size:12px;color:var(--dim)">momentum</span>
+          <div class="seg" id="bn_momseg" style="flex:1">
+            <button data-mom="0.01">.01</button>
+            <button data-mom="0.1">.1</button>
+            <button data-mom="0.5">.5</button>
+            <button data-mom="1">1</button>
+          </div>
+        </div>
+        <div class="stack-btns">
+          <button id="bn_feed">▶ feed another batch</button>
+          <button id="bn_reset">↺ reset running stats</button>
+        </div>
+        <div class="hint" id="bn_runhint" style="margin-top:6px"></div>
+      </div>
+
+      <div class="divider"></div>
+      <label class="row" style="font-size:12px;color:var(--dim);cursor:pointer">
+        <input type="checkbox" id="bn_dead" style="accent-color:var(--accent)"> channel 0 is constant (σ² = 0)
+      </label>
+
+      <div class="divider"></div>
+      <h2>Presets</h2>
+      <div class="stack-btns">
+        <button data-preset='{"norm":"batch","N":3,"C":4,"H":3,"Wd":3}'>BatchNorm2d(4)</button>
+        <button data-preset='{"norm":"batch","N":1,"C":4,"H":3,"Wd":3}'>BatchNorm, batch of 1</button>
+        <button data-preset='{"norm":"layer","N":3,"C":4,"H":3,"Wd":3}'>LayerNorm</button>
+        <button data-preset='{"norm":"instance","N":3,"C":4,"H":3,"Wd":3}'>InstanceNorm — style transfer</button>
+        <button data-preset='{"norm":"group","G":2,"N":3,"C":4,"H":3,"Wd":3}'>GroupNorm(2, 4)</button>
+        <button data-preset='{"norm":"group","G":4,"N":3,"C":4,"H":3,"Wd":3}'>GroupNorm(C) ≡ InstanceNorm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ CENTRE: the tensor ============ -->
+  <div class="col-mid">
+    <div class="panel">
+      <div id="bn_vizwrap"><canvas id="bn_viz"></canvas></div>
+      <div id="bn_readout"></div>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--accent2)"></span>positive</span>
+        <span><span class="sw" style="background:var(--accent)"></span>negative</span>
+        <span><span class="sw" style="background:var(--panel2);border:1px solid var(--line);opacity:.6"></span>greyed = pooled into a different mean</span>
+        <span>colour scale is shared inside each tensor</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Every value on one axis — before and after</h2>
+      <div id="bn_distwrap"><canvas id="bn_dist"></canvas></div>
+      <div class="note" id="bn_distnote"></div>
+    </div>
+  </div>
+
+  <!-- ============ RIGHT: shape, cost, diagnostics ============ -->
+  <div class="col-right side">
+    <div class="panel">
+      <h2>Shape &amp; cost</h2>
+      <div class="dims">
+        <span>N</span><input type="number" id="bn_dN" min="1" max="8192" step="1">
+        <span>C</span><input type="number" id="bn_dC" min="1" max="8192" step="1">
+        <span>H</span><input type="number" id="bn_dH" min="1" max="8192" step="1">
+        <span>W</span><input type="number" id="bn_dW" min="1" max="8192" step="1">
+        <button id="bn_dsync" title="bring the calculator back to the drawn tensor">↺ drawn</button>
+      </div>
+      <div class="formula" id="bn_formula"></div>
+      <div class="note" id="bn_shapenote"></div>
+    </div>
+    <div class="panel">
+      <h2>Statistics</h2>
+      <div id="bn_stattable"></div>
+    </div>
+    <div class="panel">
+      <h2>Diagnostics</h2>
+      <div id="bn_diag"></div>
+    </div>
+  </div>
+
+</div>
+</section>
