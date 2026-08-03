@@ -222,7 +222,7 @@ const S = {
   hover: null,                    // which station is under the cursor
   chip: "",                       // which chain-rule factor is hovered in the ledger
   drag: null,                     // a weight being dragged on its own wire
-  trails: true, spd: 1, holdout: true, noisy: false,
+  trails: true, spd: 1, holdout: true, noisy: false, allsteps: false,
   hstep: 1,                       // updates between two stored history samples
   steps: 0,
   hist: [],                       // batch loss, one per update
@@ -507,6 +507,12 @@ function palette(){
     accent:d ? "#4aa3ff" : "#0969da",
     amber: d ? "#f0a132" : "#bc6c00",
     bad:   d ? "#f85149" : "#cf222e",
+    // the two classes own blue and amber on the plot above, and the gradients
+    // own violet, so the two loss curves take grey and green
+    trainC: d ? "#9aa4af" : "#57606a",
+    valC:   d ? "#3fb950" : "#1a7f37",
+    valFill: d ? "rgba(63,185,80,0.10)" : "rgba(26,127,55,0.08)",
+    trainFill: d ? "rgba(154,164,175,0.10)" : "rgba(87,96,106,0.07)",
     badFill: d ? "rgba(248,81,73,0.10)" : "rgba(207,34,46,0.07)",
   };
 }
@@ -1661,19 +1667,21 @@ function planePanel(g, P, B){
     bound(S.w, S.b, P.accent, false, 2);
   }
 
+  /* One mark per point and nothing else: the colour is the class it belongs to,
+     and a hollow one is held out for validation. Whether the model has it right
+     is already on the plot — it is the colour of the ground underneath it. */
   S.data.forEach((d, i) => {
     const p = plotXY(d);
-    const r = predict(d.x) - d.t;
-    g.lineWidth = 1 + 5*Math.min(1, Math.abs(r));            // the ring is the error
-    g.strokeStyle = ramp(r, 1, P, 0.10, 0.95);
-    g.beginPath(); g.arc(p.x, p.y, 8, 0, 6.2832); g.stroke();
-    // validation points are hollow: the update never sees them
-    g.fillStyle = d.val ? P.panel : ramp(d.t - 0.5, 0.5, P, 0.35, 0.95);
-    g.beginPath(); g.arc(p.x, p.y, i === S.sample ? 5.5 : 4, 0, 6.2832); g.fill();
-    g.strokeStyle = i === S.sample ? P.text
-                  : d.val ? ramp(d.t - 0.5, 0.5, P, 0.6, 0.95) : P.frameLine;
-    g.lineWidth = i === S.sample ? 2 : d.val ? 2 : 1;
+    const col = ramp(d.t - 0.5, 0.5, P, 0.85, 0.95);
+    const r = i === S.sample ? 5.5 : 4.2;
+    g.fillStyle = d.val ? P.panel : col;
+    g.beginPath(); g.arc(p.x, p.y, r, 0, 6.2832); g.fill();
+    g.strokeStyle = col; g.lineWidth = d.val ? 2 : 1;
     g.stroke();
+    if(i === S.sample){                                   // the one the diagram is showing
+      g.strokeStyle = P.text; g.lineWidth = 1.4;
+      g.beginPath(); g.arc(p.x, p.y, r + 3.5, 0, 6.2832); g.stroke();
+    }
   });
 }
 
@@ -1721,10 +1729,10 @@ function lossPanel(g, P, B){
     g.beginPath();
     tr.forEach((y, i) => i ? g.lineTo(sx(at(i)), sy(y)) : g.moveTo(sx(at(i)), sy(y)));
     g.lineTo(sx(S.steps), sy(0)); g.lineTo(sx(0), sy(0)); g.closePath();
-    g.fillStyle = ramp(1, 1, P, 0, 0.10); g.fill();
+    g.fillStyle = P.trainFill; g.fill();
   }
-  curve(tr, P.amber, 1.8);
-  if(hasVal) curve(va, P.accent, 1.8);
+  curve(tr, P.trainC, 1.8);
+  if(hasVal) curve(va, P.valC, 1.8);
   g.restore();
 
   const last = tr.length - 1;
@@ -1733,15 +1741,15 @@ function lossPanel(g, P, B){
     g.fillStyle = col;
     g.beginPath(); g.arc(sx(S.steps), sy(v[last]), 3.5, 0, 6.2832); g.fill();
   };
-  dotAt(tr, P.amber);
-  if(hasVal) dotAt(va, P.accent);
+  dotAt(tr, P.trainC);
+  if(hasVal) dotAt(va, P.valC);
 
   g.font = "600 10.5px ui-monospace,Menlo,monospace";
   g.textAlign = "right"; g.textBaseline = "alphabetic";
-  g.fillStyle = P.amber;
+  g.fillStyle = P.trainC;
   g.fillText((hasVal ? "train " : "L = ") + fmt(tr[last], 4), B.x + B.w - 5, B.y + 13);
   if(hasVal){
-    g.fillStyle = P.accent;
+    g.fillStyle = P.valC;
     g.fillText("val " + fmt(va[last], 4), B.x + B.w - 5, B.y + 27);
   }
   // the flag itself
@@ -1761,14 +1769,17 @@ const gv = v => `<span class="gv">${fmtg(v)}</span>`;
 // ∂L/∂a must not be shouted into ∂L/∂A, nor δ into Δ — any label carrying a
 // symbol keeps its own case
 const mlbl = l => `<span class="mlbl${/[^\x00-\x7F]/.test(l) ? " raw" : ""}">${l}</span>`;
+// the sheet shows the step you are on and nothing else, unless you ask for the
+// lot: seven to twelve equations at once is a wall, not an explanation
+const rowCls = p => p === S.phase ? " now" : (!S.allsteps && p >= 0 ? " gone" : "");
 function mrow(phase, label, html){
-  return `<div class="mrow${phase === S.phase ? " now" : ""}">${mlbl(label)}
+  return `<div class="mrow${rowCls(phase)}">${mlbl(label)}
           <span class="mval">${html}</span></div>`;
 }
 // the same row, but its body is an equation: symbols on the line, the numbers
 // they currently hold hung underneath. The equation is what stays put.
 function erow(phase, label, parts){
-  return `<div class="mrow${phase === S.phase ? " now" : ""}">${mlbl(label)}
+  return `<div class="mrow${rowCls(phase)}">${mlbl(label)}
           <span class="eq">${parts.join("")}</span></div>`;
 }
 function tt(sym, num, o){
@@ -1811,13 +1822,20 @@ function mat(name, rows, cols, get, o){
   for(let j=0;j<rows;j++)
     for(let i=0;i<cols;i++){
       const v = get(j, i);
-      const hi = o.cell && o.cell.j === j && o.cell.i === i ? " hi"
-               : o.row === j ? (o.grad ? " hi2" : " hi") : "";
+      const strong = o.cell && o.cell.j === j && o.cell.i === i;
+      const soft = o.row === j || o.col === i;
+      const out = o.fade && ((o.fade.row !== undefined && j !== o.fade.row) ||
+                             (o.fade.col !== undefined && i !== o.fade.col));
+      const hi = out ? " faded"
+               : strong ? (o.grad ? " hi2" : " hi")
+               : soft   ? (o.grad ? " soft2" : " soft") : "";
       cells.push(`<span class="cell${hi}" style="background:${o.fill(v)}">${o.txt(v)}</span>`);
     }
-  return `<span class="mat"><span class="mname">${name}</span>` +
+  const tag = o.tag && o.row !== undefined
+    ? `<span class="mtag" style="--r:${o.row}">← ${o.tag}</span>` : "";
+  return `<span class="mat${tag ? " tagged" : ""}"><span class="mname">${name}</span>` +
          `<span class="mgrid" style="grid-template-columns:repeat(${cols},minmax(0,1fr))">` +
-         cells.join("") + `</span><span class="mdim">${rows}×${cols}</span></span>`;
+         cells.join("") + tag + `</span><span class="mdim">${rows}×${cols}</span></span>`;
 }
 const mop = (s, sm) => `<span class="mop${sm ? " sm" : ""}">${s}</span>`;
 
@@ -1832,14 +1850,34 @@ function netMath(){
   const num = v => fmt(v);
   const grd = v => fmtg(v);
   const eq = (phase, label, parts) =>
-    `<div class="mrow${phase === S.phase ? " now" : ""}">${mlbl(label)}
+    `<div class="mrow${rowCls(phase)}">${mlbl(label)}
      <span class="meq">${parts.join("")}</span></div>`;
   // the row this neuron occupies, in whichever layer it lives
   const row = k => k === l ? j : undefined;
+  // a weight is one cell: its row is the neuron it feeds, its column the value
+  // it multiplies. A neuron selected in the layer below is that column too.
+  const wsel = k => sel.k === "w" && sel.l === k ? sel : null;
+  const col  = k => { const w = wsel(k); return w ? w.i : (l === k - 1 ? j : undefined); };
+  const wcell = k => { const w = wsel(k); return w ? {j:w.j, i:w.i} : null; };
+  // the value the pointed-at wire multiplies, as a cell of the column vector
+  // it lives in and of the row vector it becomes when transposed
+  const incell  = k => { const w = wsel(k); return w ? {j:w.i, i:0} : null; };
+  const incellT = k => { const w = wsel(k); return w ? {j:0, i:w.i} : null; };
+  // while the mouse is on a wire or a node, everything outside that neuron's
+  // row fades: what is left is exactly the arithmetic of the one neuron
+  const foc = k => S.hover && row(k) !== undefined ? {row:row(k)} : null;
+  const focCol = k => S.hover && row(k) !== undefined ? {col:row(k)} : null;
+  const wtag = k => {
+    const w = wsel(k);
+    return w ? `w${SUB[w.j]}${SUB[w.i]} : ${aName(k-1)}${SUB[w.i]} → ${aName(k)}${SUB[w.j]}`
+             : row(k) === undefined ? null : `row ${j + 1} → ${aName(k)}${SUB[j]}`;
+  };
 
   out.push(mrow(-1, "point", `<b>${S.sample + 1} of ${S.data.length}</b>
     <span style="color:var(--dim2)">— hover a point on the boundary plot, or use ◀ ▶.
-    Point at a wire or a neuron and it lights up in every matrix below.</span>`));
+    Point at a <b>neuron</b> and the matrices below fade to just its row — the arithmetic of that one
+    neuron and nothing else; point at a <b>wire</b> and the single cell of that row it is takes the
+    strong outline.</span>`));
 
   /* ---- forward: one matrix product per layer ---- */
   for(let k=0;k<nl;k++){
@@ -1847,17 +1885,16 @@ function netMath(){
     const ly = G.layers[k], m = sh[k], n = sh[k+1];
     const inFill = k ? V_ : X_;
     out.push(eq(PH["f" + k], `${k + 1}) layer ${k + 1}`, [
-      mat(`z${SUP[k]}`, n, 1, r => ly.z[r].d, {fill:Z_, txt:num, row:row(k)}),
+      mat(`z${SUP[k]}`, n, 1, r => ly.z[r].d, {fill:Z_, txt:num, row:row(k), fade:foc(k)}),
       mop("="),
       mat(`W${SUP[k]}`, n, m, (r, c) => S.W[k][r][c],
-          {fill:W_, txt:num, row:row(k),
-           cell: sel.k === "w" && sel.l === k ? {j:sel.j, i:sel.i} : null}),
+          {fill:W_, txt:num, row:row(k), cell:wcell(k), tag:wtag(k), fade:foc(k)}),
       mop("·"),
-      mat(aName(k-1), m, 1, r => ly.in[r].d, {fill:inFill, txt:num}),
+      mat(aName(k-1), m, 1, r => ly.in[r].d, {fill:inFill, txt:num, cell:incell(k)}),
       mop("+"),
-      mat(`b${SUP[k]}`, n, 1, r => S.B[k][r], {fill:W_, txt:num, row:row(k)}),
+      mat(`b${SUP[k]}`, n, 1, r => S.B[k][r], {fill:W_, txt:num, row:row(k), fade:foc(k)}),
       mop(`→ ${ly.A.lbl} →`, true),
-      mat(aName(k), n, 1, r => ly.a[r].d, {fill:V_, txt:num, row:row(k)}),
+      mat(aName(k), n, 1, r => ly.a[r].d, {fill:V_, txt:num, row:row(k), fade:foc(k)}),
     ]));
   }
 
@@ -1883,11 +1920,13 @@ function netMath(){
 
     // δ = ∂L/∂a ⊙ f′(z), elementwise — one number per neuron, nothing more
     out.push(eq(PH["d" + k], `${PH["d" + k] + 1}) δ${SUP[k]}`, [
-      mat(`δ${SUP[k]}`, n, 1, r => ly.z[r].g, {fill:D_, txt:grd, row:row(k), grad:1}),
+      mat(`δ${SUP[k]}`, n, 1, r => ly.z[r].g, {fill:D_, txt:grd, row:row(k), grad:1, fade:foc(k)}),
       mop("="),
-      mat(`∂L/∂${aName(k)}`, n, 1, r => ly.a[r].g, {fill:D_, txt:grd, row:row(k), grad:1}),
+      mat(`∂L/∂${aName(k)}`, n, 1, r => ly.a[r].g,
+          {fill:D_, txt:grd, row:row(k), grad:1, fade:foc(k)}),
       mop("⊙"),
-      mat(`f′(z${SUP[k]})`, n, 1, r => ly.a[r].local, {fill:D_, txt:grd, row:row(k), grad:1}),
+      mat(`f′(z${SUP[k]})`, n, 1, r => ly.a[r].local,
+          {fill:D_, txt:grd, row:row(k), grad:1, fade:foc(k)}),
       `<span class="mop sm">elementwise — every neuron keeps its own</span>`,
     ]));
 
@@ -1895,12 +1934,13 @@ function netMath(){
     // the outer product: a column times a row is the whole weight matrix
     out.push(eq(PH["g" + k], `${PH["g" + k] + 1}) ∂L/∂W${SUP[k]}`, [
       mat(`∂L/∂W${SUP[k]}`, n, m, (r, c) => ly.W[r][c].g,
-          {fill:D_, txt:grd, row:row(k), grad:1,
-           cell: sel.k === "w" && sel.l === k ? {j:sel.j, i:sel.i} : null}),
+          {fill:D_, txt:grd, row:row(k), cell:wcell(k), grad:1, tag:wtag(k), fade:foc(k)}),
       mop("="),
-      mat(`δ${SUP[k]}`, n, 1, r => ly.z[r].g, {fill:D_, txt:grd, row:row(k), grad:1}),
+      mat(`δ${SUP[k]}`, n, 1, r => ly.z[r].g,
+          {fill:D_, txt:grd, row:row(k), grad:1, fade:foc(k)}),
       mop("·"),
-      mat(`${aName(k-1)}ᵀ`, 1, m, (r, c) => ly.in[c].d, {fill:k ? V_ : X_, txt:num}),
+      mat(`${aName(k-1)}ᵀ`, 1, m, (r, c) => ly.in[c].d,
+          {fill:k ? V_ : X_, txt:num, cell:incellT(k)}),
       `<span class="mop sm">and ∂L/∂b${SUP[k]} = δ${SUP[k]}</span>`,
     ]));
 
@@ -1909,9 +1949,11 @@ function netMath(){
       mat(`∂L/∂${aName(k-1)}`, m, 1, r => G.layers[k-1].a[r].g,
           {fill:D_, txt:grd, row:row(k-1), grad:1}),
       mop("="),
-      mat(`W${SUP[k]}ᵀ`, m, n, (r, c) => S.W[k][c][r], {fill:W_, txt:num}),
+      mat(`W${SUP[k]}ᵀ`, m, n, (r, c) => S.W[k][c][r],
+          {fill:W_, txt:num, col:row(k), fade:focCol(k),
+           cell: wsel(k) ? {j:wsel(k).i, i:wsel(k).j} : null}),
       mop("·"),
-      mat(`δ${SUP[k]}`, n, 1, r => ly.z[r].g, {fill:D_, txt:grd, grad:1}),
+      mat(`δ${SUP[k]}`, n, 1, r => ly.z[r].g, {fill:D_, txt:grd, row:row(k), grad:1, fade:foc(k)}),
       `<span class="mop sm">the same wires, transposed — this is the whole recursion</span>`,
     ]));
   }
@@ -2243,6 +2285,9 @@ function buildControls(){
   });
   split("holdout", "holdout");
   split("noisy", "noisy");
+  el("allsteps").addEventListener("change", e => {
+    S.allsteps = e.target.checked; renderMath(); syncControls();
+  });
 }
 
 function pick(i){
@@ -2321,6 +2366,10 @@ function syncControls(){
   el("splitwrap").classList.toggle("gone", !isNet());
   el("holdout").checked = S.holdout;
   el("noisy").checked = S.noisy;
+  el("allsteps").checked = S.allsteps;
+  el("mathhint").innerHTML = S.allsteps
+    ? `All ${PHASES.length} steps at once.`
+    : `Just step <b>${S.phase + 1}</b> — ${PHASES[S.phase].lbl}. The rest are still there, folded away.`;
   el("stephint").innerHTML = S.spd > 2
     ? `<b>${S.steps}</b> updates — ▶ trains without stopping at the stations.`
     : S.phase === PHASES.length - 1
@@ -2352,7 +2401,9 @@ function hitNet(ev){
     for(let j=0;j<sh[l];j++)
       if(Math.hypot(x - nodeX(l), y - nodeY(l, j)) < NR + 6){
         if(l === 0) return {part:`x${j}`, node:null};
-        return {part:`n${l-1}_${j}`, node:{l:l-1, j}};
+        // pointing at a neuron re-points the chain rule at its first weight, so
+        // the maths below follows the thing you are looking at
+        return {part:`n${l-1}_${j}`, node:{l:l-1, j}, sel:{k:"w", l:l-1, j, i:0}};
       }
 
   for(let l=0;l<nl;l++)
@@ -2457,8 +2508,10 @@ function wire(){
   addEventListener("mouseup", () => { if(S.drag){ S.drag = null; refresh(); } });
   cv.addEventListener("mouseleave", () => {
     if(S.hover === null || S.drag) return;
-    S.hover = null; paint();
-  });
+    S.hover = null;
+    paint();
+    if(isNet()) renderMath();      // the matrices fade with the hover, so they
+  });                              // have to come back with it too
 
   // hovering the fit scrubs through the points — the diagram fills with whichever
   // one is under the cursor, and keeps the last when the cursor leaves

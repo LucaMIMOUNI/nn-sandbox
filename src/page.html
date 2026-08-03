@@ -330,7 +330,7 @@
       <div id="bp_splitwrap" style="margin-top:9px">
         <label class="chk"><input type="checkbox" id="bp_holdout"> validation split</label>
         <div class="hint" style="margin-top:2px">Holds a third of the points out of the update — never
-          trained on. The hollow points on the plot, and the blue curve on the loss.</div>
+          trained on. The hollow points on the plot, and the green curve on the loss.</div>
         <label class="chk" style="margin-top:7px"><input type="checkbox" id="bp_noisy"> noisy labels</label>
         <div class="hint" style="margin-top:2px">Flips one training label in five. The fastest way to watch
           a model spend its capacity on memorising.</div>
@@ -394,6 +394,10 @@
       <div id="bp_vizwrap"><canvas id="bp_viz"></canvas></div>
       <div class="hint" id="bp_vizcap" style="margin-top:7px;min-height:32px;line-height:1.5"></div>
 
+      <div class="stepbar" style="margin-top:9px;padding-top:0;border:0">
+        <label class="chk"><input type="checkbox" id="bp_allsteps"> every step of the maths at once</label>
+        <span class="hint" id="bp_mathhint" style="margin:0"></span>
+      </div>
       <div id="bp_readout"></div>
     </div>
   </div>
