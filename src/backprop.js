@@ -105,7 +105,7 @@ const r2 = v => Math.round(v*100)/100;
 const SETS = {
   line: {
     name:"a line to fit", note:"linear — least squares, the classic",
-    nin:1, act:"linear", w:[-0.6], b:-0.9, lr:0.2,
+    for:"one", nin:1, act:"linear", w:[-0.6], b:-0.9, lr:0.2,
     make(){
       const r = prng(20250801), out = [];
       for(let i=0;i<13;i++){
@@ -120,7 +120,7 @@ const SETS = {
   },
   step: {
     name:"a step to fit", note:"sigmoid — logistic regression",
-    nin:1, act:"sigmoid", w:[0.4], b:0.1, lr:1.5,
+    for:"one", nin:1, act:"sigmoid", w:[0.4], b:0.1, lr:1.5,
     make(){
       const out = [];
       for(let i=0;i<14;i++){
@@ -134,8 +134,8 @@ const SETS = {
          because a steeper sigmoid means a smaller ∂a/∂z and so a smaller gradient.`,
   },
   plane: {
-    name:"two clusters", note:"sigmoid on a plane — a boundary",
-    nin:2, act:"sigmoid", w:[0.3, -0.4], b:0, lr:1.0,
+    name:"two clusters", note:"one line is enough",
+    for:"both", nin:2, act:"sigmoid", w:[0.3, -0.4], b:0, lr:1.0, netlr:1.0, netact:"tanh",
     make(){
       const r = prng(77003), out = [];
       for(let i=0;i<9;i++)  out.push({x:[r2(-1.1 + 0.5*gauss(r)), r2(-0.7 + 0.5*gauss(r))], t:0});
@@ -146,43 +146,129 @@ const SETS = {
          exactly 0.5 — its decision boundary. Training slides and rotates that line until the two clusters
          land on opposite sides of it.`,
   },
+
+  /* ---- the two that a single neuron cannot do at all ---- */
+  xor: {
+    name:"xor", note:"two lines needed — no single one works",
+    for:"net", nin:2, netact:"tanh", netlr:0.6,
+    make(){
+      const r = prng(4242), out = [];
+      for(const c of [[-1.15,-1.15,0], [1.15,1.15,0], [-1.15,1.15,1], [1.15,-1.15,1]])
+        for(let i=0;i<8;i++)
+          out.push({x:[r2(c[0] + 0.4*gauss(r)), r2(c[1] + 0.4*gauss(r))], t:c[2]});
+      return out;
+    },
+    why:`Opposite corners share a class, so <b>no straight line separates them</b> — a single neuron is
+         stuck at L ≈ 0.25 forever. Each hidden neuron draws one line; the output neuron combines them.
+         That is the whole reason for a hidden layer.`,
+  },
+  circle: {
+    name:"a circle", note:"inside vs outside — a closed boundary",
+    for:"net", nin:2, netact:"tanh", netlr:0.6,
+    make(){
+      const r = prng(90210), out = [];
+      for(let i=0;i<16;i++){
+        const th = r()*6.2832, rad = 0.25 + 0.6*r();
+        out.push({x:[r2(rad*Math.cos(th)), r2(rad*Math.sin(th))], t:1});
+      }
+      for(let i=0;i<20;i++){
+        const th = r()*6.2832, rad = 1.45 + 0.55*r();
+        out.push({x:[r2(rad*Math.cos(th)), r2(rad*Math.sin(th))], t:0});
+      }
+      return out;
+    },
+    why:`The boundary has to close on itself, which no half-plane can do. With enough hidden neurons the
+         network fences the middle in with straight lines and rounds them off — watch the heat map on the
+         right go from a smear to a blob.`,
+  },
 };
 
-/* ================================ state ================================ */
-/* Seven stations, not five: the backward half is broken up exactly the way the
-   forward half is, one multiplication per step. Running it in a single jump is
-   what makes the chain rule look like magic. */
-const PHASES = [
-  {id:"z",  lbl:"weighted sum", eq:() => "z = Σ wᵢ·xᵢ + b"},
-  {id:"a",  lbl:"activation",   eq:() => "a = " + ACT[S.act].call},
-  {id:"L",  lbl:"loss",         eq:() => "L = (a − t)²"},
-  {id:"ga", lbl:"loss slope",   eq:() => "∂L/∂a = 2(a − t)"},
-  {id:"gz", lbl:"through f",    eq:() => "∂L/∂z = ∂L/∂a · ∂a/∂z"},
-  {id:"gw", lbl:"onto w and b", eq:() => "∂L/∂w = ∂L/∂z · x"},
-  {id:"u",  lbl:"update",       eq:() => "w ← w − η · ∂L/∂w"},
-];
-const PH = {z:0, a:1, L:2, ga:3, gz:4, gw:5, u:6};
+/* ============================ the network ============================
+   The page is one neuron until you give it a hidden layer. Everything from
+   here on is written for a list of layers; the single neuron is the case
+   where that list holds one layer of one neuron, and it keeps its own
+   drawing code, because that picture is what the page is for.
+   ===================================================================== */
+const NETS = {
+  one: {lbl:"1 neuron",       note:"a = f(w·x + b)",     hidden:0},
+  h1:  {lbl:"1 hidden layer", note:"2 → h → 1",          hidden:1},
+  h2:  {lbl:"2 hidden layers",note:"2 → h → h → 1",      hidden:2},
+};
+const isNet = () => S.net !== "one";
+const shape = () => isNet() ? [2, ...Array(NETS[S.net].hidden).fill(S.width), 1]
+                            : [S.nin, 1];
+const NLAY = () => shape().length - 1;
+// hidden layers use the activation you picked; the last one is always a sigmoid,
+// because every dataset worth a hidden layer here has 0/1 targets
+const layerAct = l => l === NLAY() - 1 ? ACT.sigmoid : ACT[S.act];
+const nparams = () => shape().slice(1).reduce((s, n, l) => s + n*(shape()[l] + 1), 0);
 
+const SUB = ["₁","₂","₃","₄"];
+const SUP = ["¹","²","³"];
+const el = id => document.getElementById("bp_" + id);
+
+/* ================================ state ================================ */
 const S = {
+  net:"one", width:4,             // architecture
   set:"line", nin:1, data:[],
-  w:[-0.6, 0], b:-0.9,
+  w:[-0.6, 0], b:-0.9,            // the single neuron
   w0:[-0.6, 0], b0:-0.9,          // what "reset" goes back to
+  W:[], B:[], W0:[], B0:[],       // the layered net — W[layer][out][in]
   act:"linear", lr:0.2,
   sample: 6,                      // which point fills the stations
   phase: 0,
-  sel: {k:"w", i:0},              // which parameter the chain rule is written for
+  sel: {k:"w", i:0, l:0, j:0},    // which parameter the chain rule is written for
+  selN: {l:0, j:0},               // whose stations the strip below the net shows
   hover: null,                    // which station is under the cursor
   chip: "",                       // which chain-rule factor is hovered in the ledger
   drag: null,                     // a weight being dragged on its own wire
-  trails: true,
+  trails: true, spd: 1,
   steps: 0,
   hist: [],                       // batch loss, one per update
   track: [],                      // (w, b) at each update — where every prediction has been
   playing: false,
 };
 
-const SUB = ["₁","₂","₃","₄"];
-const el = id => document.getElementById("bp_" + id);
+/* Seven stations for one neuron: the backward half is broken up exactly the way
+   the forward half is, one multiplication per step. A net gets the same
+   treatment, two stations per layer on the way back — which is how you watch the
+   chain rule grow a factor for every layer you add. */
+const ONE_PHASES = [
+  {id:"z",  grp:"forward",  lbl:"weighted sum", eq:() => "z = Σ wᵢ·xᵢ + b"},
+  {id:"a",  grp:"forward",  lbl:"activation",   eq:() => "a = " + ACT[S.act].call},
+  {id:"L",  grp:"forward",  lbl:"loss",         eq:() => "L = (a − t)²"},
+  {id:"ga", grp:"backward", lbl:"loss slope",   eq:() => "∂L/∂a = 2(a − t)"},
+  {id:"gz", grp:"backward", lbl:"through f",    eq:() => "∂L/∂z = ∂L/∂a · ∂a/∂z"},
+  {id:"gw", grp:"backward", lbl:"onto w and b", eq:() => "∂L/∂w = ∂L/∂z · x"},
+  {id:"u",  grp:"step",     lbl:"update",       eq:() => "w ← w − η · ∂L/∂w"},
+];
+let PHASES = ONE_PHASES;
+let PH = {z:0, a:1, L:2, ga:3, gz:4, gw:5, u:6};
+
+const aName = l => l < 0 ? "x" : "a" + SUP[l];
+function setPhases(){
+  if(!isNet()) PHASES = ONE_PHASES;
+  else {
+    const nl = NLAY(), P = [];
+    for(let l=0;l<nl;l++)
+      P.push({id:"f" + l, l, grp:"forward", lbl:`layer ${l + 1}`,
+              eq:() => `${aName(l)} = f( W${SUP[l]}·${aName(l-1)} + b${SUP[l]} )`});
+    P.push({id:"L",  grp:"forward",  lbl:"loss",  eq:() => "L = (a − t)²"});
+    P.push({id:"ga", grp:"backward", lbl:"∂L/∂a", eq:() => `∂L/∂${aName(nl-1)} = 2(a − t)`});
+    for(let l=nl-1;l>=0;l--){
+      P.push({id:"d" + l, l, grp:"backward", lbl:`δ${SUP[l]}`,
+              eq:() => `δ${SUP[l]} = ∂L/∂${aName(l)} ⊙ f′(z${SUP[l]})`});
+      P.push({id:"g" + l, l, grp:"backward", lbl:`∂L/∂W${SUP[l]}`,
+              eq:() => `∂L/∂W${SUP[l]} = δ${SUP[l]}·${aName(l-1)}ᵀ` +
+                       (l ? `,  ∂L/∂${aName(l-1)} = W${SUP[l]}ᵀ·δ${SUP[l]}` : "")});
+    }
+    P.push({id:"u", grp:"step", lbl:"update", eq:() => "W ← W − η · ∂L/∂W"});
+    PHASES = P;
+  }
+  PH = {};
+  PHASES.forEach((p, i) => PH[p.id] = i);
+  S.phase = Math.min(S.phase, PHASES.length - 1);
+}
 
 /* ============================== the maths ============================== */
 let GS = [];                      // one graph per data point
@@ -206,15 +292,68 @@ function graph(d){
   return {x, w, b, prod, z, a, t, e, L, d};
 }
 
+/* the same forward pass, layer by layer. Every weight of every layer gets its own
+   node, so the gradient the page draws on a wire is the one the engine produced
+   for exactly that wire — nothing here is a formula re-derived for the picture. */
+function netGraph(d){
+  const sh = shape(), layers = [];
+  let a = d.x.slice(0, sh[0]).map(v => V(v));
+  const a0 = a;
+  for(let l=0;l<sh.length-1;l++){
+    const W = S.W[l].map(row => row.map(v => V(v)));
+    const B = S.B[l].map(v => V(v));
+    const A = layerAct(l), z = [], prod = [];
+    for(let j=0;j<W.length;j++){
+      const pr = W[j].map((w, i) => mul(w, a[i]));
+      let s = pr[0];
+      for(let i=1;i<pr.length;i++) s = add(s, pr[i]);
+      z.push(add(s, B[j]));
+      prod.push(pr);
+    }
+    const out = z.map(zz => A.f(zz));
+    layers.push({W, B, z, a:out, prod, in:a, A});
+    a = out;
+  }
+  const t = V(d.t), e = sub(a[0], t), L = mul(e, e);
+  backward(L);
+  return {a0, layers, out:a[0], t, e, L, d};
+}
+
+// the mean of the per-point gradients, in the shape of the parameters themselves
+let GW = [], GB = [];
 function compute(){
-  GS = S.data.map(graph);
+  GS = S.data.map(isNet() ? netGraph : graph);
   const n = GS.length || 1;
   LOSS = GS.reduce((s, g) => s + g.L.d, 0)/n;
   // L = mean of the per-point losses, so dL/dw is the mean of the per-point gradients
-  GRAD = {w: Array.from({length:S.nin}, (_, i) => GS.reduce((s, g) => s + g.w[i].g, 0)/n),
-          b: GS.reduce((s, g) => s + g.b.g, 0)/n};
+  if(isNet()){
+    GW = S.W.map((Wl, l) => Wl.map((row, j) => row.map((_, i) =>
+           GS.reduce((s, g) => s + g.layers[l].W[j][i].g, 0)/n)));
+    GB = S.B.map((Bl, l) => Bl.map((_, j) =>
+           GS.reduce((s, g) => s + g.layers[l].B[j].g, 0)/n));
+  } else {
+    GRAD = {w: Array.from({length:S.nin}, (_, i) => GS.reduce((s, g) => s + g.w[i].g, 0)/n),
+            b: GS.reduce((s, g) => s + g.b.g, 0)/n};
+  }
   S.sample = Math.min(S.sample, GS.length - 1);
   G = GS[S.sample];
+}
+
+/* the forward pass with no graph at all — the heat map calls it thousands of
+   times per repaint, so it has to be plain arithmetic */
+function predict(x){
+  if(!isNet()) return ACT[S.act].raw(S.w[0]*x[0] + (S.nin > 1 ? S.w[1]*x[1] : 0) + S.b);
+  let a = x.slice(0, 2);
+  for(let l=0;l<S.W.length;l++){
+    const A = layerAct(l), out = [];
+    for(let j=0;j<S.W[l].length;j++){
+      let s = S.B[l][j];
+      for(let i=0;i<a.length;i++) s += S.W[l][j][i]*a[i];
+      out.push(A.raw(s));
+    }
+    a = out;
+  }
+  return a[0];
 }
 
 // the finite-difference check that used to sit in a Diagnostics panel now lives
@@ -224,10 +363,19 @@ const diverged = () => !isFinite(LOSS) || LOSS > 1e8;
 function applyUpdate(){
   if(diverged()) return;
   S.hist.push(LOSS);                          // the loss this step was taken at
-  S.track.push({w:S.w.slice(), b:S.b});
-  if(S.hist.length > 600){ S.hist.shift(); S.track.shift(); }
-  for(let i=0;i<S.nin;i++) S.w[i] -= S.lr*GRAD.w[i];
-  S.b -= S.lr*GRAD.b;
+  if(isNet()){
+    for(let l=0;l<S.W.length;l++){
+      for(let j=0;j<S.W[l].length;j++){
+        for(let i=0;i<S.W[l][j].length;i++) S.W[l][j][i] -= S.lr*GW[l][j][i];
+        S.B[l][j] -= S.lr*GB[l][j];
+      }
+    }
+  } else {
+    S.track.push({w:S.w.slice(), b:S.b});
+    for(let i=0;i<S.nin;i++) S.w[i] -= S.lr*GRAD.w[i];
+    S.b -= S.lr*GRAD.b;
+  }
+  if(S.hist.length > 1200){ S.hist.shift(); if(S.track.length) S.track.shift(); }
   S.steps++;
   compute();
 }
@@ -238,32 +386,75 @@ function train(n){
   refresh();
 }
 
+const clone = a => a.map(r => Array.isArray(r) ? clone(r) : r);
+
+// PyTorch initialises nn.Linear uniformly on ±1/√fan_in, per layer
+function initNet(rnd){
+  const sh = shape();
+  S.W = []; S.B = [];
+  for(let l=0;l<sh.length-1;l++){
+    const k = 1/Math.sqrt(sh[l]);
+    S.W.push(Array.from({length:sh[l+1]}, () =>
+             Array.from({length:sh[l]}, () => r2((rnd()*2 - 1)*k))));
+    S.B.push(Array.from({length:sh[l+1]}, () => 0));
+  }
+  S.W0 = clone(S.W); S.B0 = clone(S.B);
+}
+// the page has to open the same way every time, so the default init is seeded
+const seeded = () => initNet(prng(12345 + S.width*7 + NETS[S.net].hidden*131));
+
+// a net opens on the first hidden layer: it is where the forward pass starts,
+// where the recursion lives, and where the chain rule is at its longest
+function selDefault(){
+  const nl = NLAY();
+  S.selN = {l:0, j:0};
+  S.sel  = isNet() ? {k:"w", l:0, j:0, i:0} : {k:"w", i:0, l:0, j:0};
+}
+
 function loadSet(key){
   const D = SETS[key];
-  S.set = key; S.nin = D.nin; S.act = D.act; S.lr = D.lr;
+  S.set = key;
   S.data = D.make();
-  S.w = [D.w[0], D.w[1] || 0]; S.b = D.b;
-  S.w0 = S.w.slice(); S.b0 = S.b;
+  S.act = (isNet() ? D.netact : D.act) || D.act;
+  S.lr  = (isNet() ? D.netlr  : D.lr)  || D.lr;
+  if(isNet()){ S.nin = 2; seeded(); }
+  else {
+    S.nin = D.nin;
+    S.w = [D.w[0], D.w[1] || 0]; S.b = D.b;
+    S.w0 = S.w.slice(); S.b0 = S.b;
+  }
   // open on the point furthest from the origin: at x = 0 every product is 0 and
   // the whole diagram fades to nothing, which is a poor first impression
   S.sample = S.data.reduce((best, d, i, a) =>
     Math.hypot(...d.x.slice(0, S.nin)) > Math.hypot(...a[best].x.slice(0, S.nin)) ? i : best, 0);
-  S.sel = {k:"w", i:0};
+  selDefault();
+  setPhases();
   S.steps = 0; S.hist = []; S.track = []; S.phase = 0;
 }
 
+// switching architecture keeps the dataset when it still makes sense — the two
+// clusters are worth seeing with and without a hidden layer
+function loadNet(key){
+  S.net = key;
+  const ok = k => SETS[k].for === "both" || SETS[k].for === (isNet() ? "net" : "one");
+  loadSet(ok(S.set) ? S.set : (isNet() ? "xor" : "line"));
+}
+
 function reset(){
-  S.w = S.w0.slice(); S.b = S.b0;
+  if(isNet()){ S.W = clone(S.W0); S.B = clone(S.B0); }
+  else { S.w = S.w0.slice(); S.b = S.b0; }
   S.steps = 0; S.hist = []; S.track = []; S.phase = 0;
   refresh();
 }
 
-// PyTorch initialises nn.Linear uniformly on ±1/√fan_in
 function randomise(){
-  const k = 1/Math.sqrt(S.nin);
-  S.w = S.w.map(() => r2((Math.random()*2 - 1)*k));
-  S.b = r2((Math.random()*2 - 1)*k);
-  S.w0 = S.w.slice(); S.b0 = S.b;
+  if(isNet()) initNet(Math.random);
+  else {
+    const k = 1/Math.sqrt(S.nin);
+    S.w = S.w.map(() => r2((Math.random()*2 - 1)*k));
+    S.b = r2((Math.random()*2 - 1)*k);
+    S.w0 = S.w.slice(); S.b0 = S.b;
+  }
   S.steps = 0; S.hist = []; S.track = []; S.phase = 0;
   refresh();
 }
@@ -314,7 +505,9 @@ let XMAX = 1, ZMAX = 1;
 function scales(){
   XMAX = 1e-6; ZMAX = 1e-6;
   for(const d of S.data) for(let i=0;i<S.nin;i++) XMAX = Math.max(XMAX, Math.abs(d.x[i]));
-  for(const g of GS) ZMAX = Math.max(ZMAX, Math.abs(g.z.d));
+  for(const g of GS)
+    if(isNet()) for(const ly of g.layers) for(const z of ly.z) ZMAX = Math.max(ZMAX, Math.abs(z.d));
+    else ZMAX = Math.max(ZMAX, Math.abs(g.z.d));
 }
 const WMAX = 2.5;
 
@@ -444,6 +637,7 @@ function liveSet(){
 
 /* ============================ the two bands ============================ */
 function paint(){
+  if(isNet()) return paintNet();
   const P = palette();
   LY = layout();
   const g = fitCanvas(el("viz"), LY.w, LY.h, LY.css);
@@ -586,6 +780,272 @@ function paint(){
   else                   ghost(g, P, 8, LY.uy, LY.right - 8, UH, "7)  w ← w − η · ∂L/∂w");
 }
 
+/* ======================= the network, drawn once =======================
+   One picture, both directions. Every wire carries its weight in the forward
+   lane and, once the backward pass has reached that layer, ∂L/∂w in a violet
+   lane beside it running the other way. Every node holds its activation, with
+   the gradient that came back to it in a pill directly underneath — the same
+   "gradients sit under the values they came from" as the single neuron, folded
+   into one drawing because a net has too many stations to lay out twice.
+
+   Underneath, the four station cards of the single-neuron page, pointed at
+   whichever neuron you select: an MLP is that neuron, many times over.
+   ======================================================================= */
+const NR = 15, ROWSP = 58, SGAP = 12;
+
+function netLayout(){
+  const room = (el("vizwrap").clientWidth || 900) - 2;
+  const avail = Math.max(800, Math.min(1240, room));
+  const sh = shape(), rows = Math.max(...sh);
+  const lossW = 172, lossGap = 46;
+  const x0 = 74, xn = avail - lossW - lossGap - 10;
+  const NY = 40;
+  const cy = NY + 14 + NR + (rows - 1)*ROWSP/2;
+  const bandH = 14 + 2*NR + (rows - 1)*ROWSP + 30;
+  const sy = NY + bandH + 24;
+  const strip = 136;
+  const uy = sy + strip + 16;
+  // the strip: sum, activation, δ, then the weight gradients
+  const inner = avail - 16 - 3*SGAP;
+  const cw = [0.31, 0.20, 0.21, 0.28].map(f => Math.round(inner*f));
+  const cx = [8];
+  for(let i=1;i<4;i++) cx.push(cx[i-1] + cw[i-1] + SGAP);
+  return {w:avail, css:Math.min(room, avail), h: uy + UH + 12,
+          x0, dx:(xn - x0)/(sh.length - 1), NY, bandH, cy, sy, strip, uy,
+          lossX: xn + lossGap, lossW, cx, cw, right: avail - 8};
+}
+const nodeX = l => LY.x0 + l*LY.dx;
+const nodeY = (l, j) => LY.cy + (j - (shape()[l] - 1)/2)*ROWSP;
+
+// column l holds the activations layer l−1 produced; column 0 holds the inputs
+const colVal  = (l, j) => l ? G.layers[l-1].a[j] : G.a0[j];
+const colDelta = (l, j) => l ? G.layers[l-1].z[j] : null;
+
+function paintNet(){
+  const P = palette();
+  LY = netLayout();
+  const g = fitCanvas(el("viz"), LY.w, LY.h, LY.css);
+  g.clearRect(0, 0, LY.w, LY.h);
+
+  const sh = shape(), nl = NLAY(), p = S.phase, ph = (frame % 120)/120;
+  const fwd = l => p >= PH["f" + l];                 // layer l has produced its values
+  const grd = l => p >= PH["g" + l] && !diverged();  // its weight gradients exist
+  const dlt = l => p >= PH["d" + l] && !diverged();  // its δ exists
+
+  g.lineJoin = "round"; g.textBaseline = "middle";
+  bandLabel(g, P, `the network — ${sh.join(" → ")}, ${nparams()} parameters, `
+                + `${S.data.length} points through it`, 8, 20);
+
+  /* ---- wires: the weight one way, its gradient the other ---- */
+  for(let l=0;l<nl;l++)
+    for(let j=0;j<sh[l+1];j++)
+      for(let i=0;i<sh[l];i++) netWire(g, P, l, j, i, grd(l), ph);
+
+  /* ---- nodes, with the gradient that reached them underneath ---- */
+  for(let l=0;l<=nl;l++)
+    for(let j=0;j<sh[l];j++)
+      netNode(g, P, l, j, l === 0 || fwd(l - 1), l === 0 ? grd(0) : dlt(l - 1));
+
+  /* ---- the loss, at the end of the line ---- */
+  const out = G.out, lx = LY.lx = LY.lossX, ly = LY.cy - 62;
+  const lit = p >= PH.L;
+  card(g, P, lx, ly, LY.lossW, 124, 1, lit ? ramp(G.L.d, 1, P, 0.02, 0.2) : null);
+  g.textAlign = "left"; g.font = "9.5px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim;
+  g.fillText(`${PH.L + 1})  L = (a − t)²`, lx + 10, ly + 14);
+  if(lit){
+    sparkLoss(g, P, lx + 12, ly + 22, LY.lossW - 24, 58, out.d, G.d.t);
+    g.textAlign = "left"; g.font = "700 13px ui-monospace,Menlo,monospace"; g.fillStyle = P.text;
+    g.fillText("L = " + fmt(G.L.d, 4), lx + 12, ly + 96);
+    g.font = "10px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim;
+    g.fillText(`target ${fmt(G.d.t)} · batch ${fmt(LOSS, 4)}`, lx + 12, ly + 112);
+  } else waiting(g, P, lx, ly, LY.lossW, 124, "L = ?");
+  arrow(g, P, nodeX(nl) + NR, LY.cy, lx, LY.cy, 1, "a");
+  if(p >= PH.ga && !diverged())
+    backArrow(g, P, lx - 6, nodeX(nl) + NR + 4, LY.cy + 16, 1, ph);
+
+  /* ---- the four stations, for the neuron you picked ---- */
+  netStrip(g, P, ph);
+
+  /* ---- the step ---- */
+  if(p >= PH.u && !diverged()) netUpdate(g, P, LY.uy);
+  else ghost(g, P, 8, LY.uy, LY.right - 8, UH,
+             p >= PH.u ? "diverged — nothing to apply"
+                       : `${PH.u + 1})  W ← W − η · ∂L/∂W  —  all ${nparams()} at once`);
+}
+
+/* one wire, drawn twice: the weight going right, its gradient coming back */
+function netWire(g, P, l, j, i, showGrad, ph){
+  const x0 = nodeX(l) + NR, y0 = nodeY(l, i);
+  const x1 = nodeX(l + 1) - NR, y1 = nodeY(l + 1, j);
+  const w = S.W[l][j][i];
+  const sel = S.sel.k === "w" && S.sel.l === l && S.sel.j === j && S.sel.i === i;
+  const hot = S.hover === `w${l}_${j}_${i}`;
+  const t = Math.min(1, Math.abs(w)/WMAX);
+  const rgb = w >= 0 ? P.pos : P.neg;
+
+  if(sel || hot){
+    g.strokeStyle = P.accent; g.lineWidth = 3 + 3.4*t;
+    seg(g, x0, y0, x1, y1);
+  }
+  g.strokeStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${0.22 + 0.7*t})`;
+  g.lineWidth = 0.8 + 3.4*t;
+  seg(g, x0, y0, x1, y1);
+
+  if(!showGrad) return;
+  // the return lane, offset to the side so the two are never the same line
+  const gr = G.layers[l].W[j][i].g;
+  const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy) || 1;
+  const ox = -dy/len*5, oy = dx/len*5;
+  const gt = Math.min(1, Math.abs(gr)/GMAX);
+  g.strokeStyle = gramp(gr, P, 0.10, 0.85); g.lineWidth = 0.8 + 2.8*gt;
+  seg(g, x0 + ox, y0 + oy, x1 + ox, y1 + oy);
+  pulse(g, P, x1 + ox + (x0 - x1)*ph, y1 + oy + (y0 - y1)*ph, ph);
+}
+
+function netNode(g, P, l, j, lit, gradLit){
+  const x = nodeX(l), y = nodeY(l, j), v = colVal(l, j);
+  const sel = S.selN.l === l - 1 && S.selN.j === j;
+  g.globalAlpha = 1;
+  g.fillStyle = P.frame;
+  g.beginPath(); g.arc(x, y, NR, 0, 6.2832); g.fill();
+  if(lit){ g.fillStyle = ramp(v.d, l ? 1.1 : XMAX, P, 0.05, 0.8);
+           g.beginPath(); g.arc(x, y, NR, 0, 6.2832); g.fill(); }
+  g.strokeStyle = sel ? P.accent : P.frameLine;
+  g.lineWidth = sel ? 2.4 : 1.2;
+  g.beginPath(); g.arc(x, y, NR, 0, 6.2832); g.stroke();
+
+  g.textAlign = "center";
+  g.font = "700 11px ui-monospace,Menlo,monospace"; g.fillStyle = P.text;
+  g.fillText(lit ? fmt(v.d) : "?", x, y);
+
+  // the gradient that came back to this node, directly underneath it
+  if(gradLit){
+    const gr = l ? colDelta(l, j).g : v.g;
+    g.fillStyle = gramp(gr, P, 0.06, 0.5);
+    roundRect(g, x - 25, y + NR + 3, 50, 15, 4); g.fill();
+    g.font = "600 9.5px ui-monospace,Menlo,monospace"; g.fillStyle = P.text;
+    g.fillText(fmtg(gr), x, y + NR + 10.5);
+  }
+  if(l === 0 || j === 0){
+    g.font = "600 9.5px ui-sans-serif,system-ui"; g.fillStyle = P.dim2;
+    g.fillText(l === 0 ? "x" : aName(l - 1), x, LY.NY + 4);
+  }
+}
+
+/* ---------- the four stations, for the selected neuron ---------- */
+function netStrip(g, P, ph){
+  const l = S.selN.l, j = S.selN.j, ly = G.layers[l], A = ly.A;
+  const p = S.phase, sh = shape();
+  const z = ly.z[j], a = ly.a[j], nin = sh[l];
+  const name = `${aName(l)}${SUB[j]}`;
+  const seen = p >= PH["f" + l], dSeen = p >= PH["d" + l] && !diverged();
+  const gSeen = p >= PH["g" + l] && !diverged();
+
+  bandLabel(g, P, `neuron ${name} — the same four stations as one neuron on its own`, 8, LY.sy - 12);
+
+  /* 1 — the weighted sum */
+  const b0 = {x:LY.cx[0], w:LY.cw[0]};
+  const rt = LY.sy + 24, rh = Math.min(ROWH, (LY.strip - 62)/(nin + 1));
+  card(g, P, b0.x, LY.sy, b0.w, LY.strip, 1);
+  label(g, P, b0.x + 10, LY.sy + 13,
+        `${PH["f" + l] + 1})  z${SUP[l]}${SUB[j]} = Σ W${SUP[l]}${SUB[j]}ᵢ·${aName(l-1)}ᵢ + b`);
+  if(seen){
+    for(let i=0;i<nin;i++)
+      termRow(g, P, b0.x, b0.w, rt + i*rh + rh/2,
+              `w${SUB[j]}${SUB[i]}·${aName(l-1)}${SUB[i]}`,
+              `${fmt(S.W[l][j][i])} · ${fmt(ly.in[i].d)}`, ly.prod[j][i].d, 1, rh);
+    termRow(g, P, b0.x, b0.w, rt + nin*rh + rh/2, "b", "", S.B[l][j], 1, rh);
+    g.strokeStyle = P.frameLine; g.lineWidth = 1;
+    const rule = rt + (nin + 1)*rh + 4;
+    seg(g, b0.x + 10, rule, b0.x + b0.w - 10, rule);
+    g.fillStyle = ramp(z.d, ZMAX, P, 0.08, 0.55);
+    roundRect(g, b0.x + 8, rule + 5, b0.w - 16, 21, 6); g.fill();
+    g.textAlign = "left"; g.font = "700 13px ui-monospace,Menlo,monospace"; g.fillStyle = P.text;
+    g.fillText(`z = ${fmt(z.d)}`, b0.x + 15, rule + 15.5);
+  } else waiting(g, P, b0.x, LY.sy, b0.w, LY.strip, "z = ?");
+
+  /* 2 — through the activation */
+  const b1 = {x:LY.cx[1], w:LY.cw[1]};
+  card(g, P, b1.x, LY.sy, b1.w, LY.strip, 1, seen ? ramp(a.d, 1.2, P, 0.02, 0.18) : null);
+  label(g, P, b1.x + 10, LY.sy + 13, `${aName(l)}${SUB[j]} = ${A.call}`);
+  if(seen){
+    sparkAct(g, P, b1.x + 12, LY.sy + 22, b1.w - 24, 62, A, z.d, a.d, a.local);
+    g.textAlign = "left"; g.font = "700 13px ui-monospace,Menlo,monospace"; g.fillStyle = P.text;
+    g.fillText("a = " + fmt(a.d), b1.x + 12, LY.sy + 98);
+    g.font = "10px ui-monospace,Menlo,monospace"; g.fillStyle = P.gradCss;
+    g.fillText(`f′(z) = ${fmtg(a.local)}`, b1.x + 12, LY.sy + 116);
+  } else waiting(g, P, b1.x, LY.sy, b1.w, LY.strip, "a = ?");
+
+  /* 3 — δ, the one new equation a layer brings */
+  const b2 = {x:LY.cx[2], w:LY.cw[2]};
+  const last = l === NLAY() - 1;
+  if(dSeen){
+    card(g, P, b2.x, LY.sy, b2.w, LY.strip, 1, gramp(z.g, P, 0.02, 0.22));
+    g.textAlign = "left"; g.font = "600 10.5px ui-monospace,Menlo,monospace"; g.fillStyle = P.gradCss;
+    g.fillText(`δ${SUP[l]}${SUB[j]} = ∂L/∂${name} · f′(z)`, b2.x + 12, LY.sy + 15);
+    g.font = "10px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim;
+    g.fillText(last ? `∂L/∂a = 2( ${fmt(a.d)} − ${par(fmt(G.d.t))} )`
+                    : shape()[l+2] > 1 ? `∂L/∂a = Σ over the ${shape()[l+2]} paths above`
+                                       : `∂L/∂a = the one path above`,
+               b2.x + 12, LY.sy + 36);
+    g.fillStyle = P.text; g.font = "600 11px ui-monospace,Menlo,monospace";
+    g.fillText(`= ${fmtg(a.g)}`, b2.x + 12, LY.sy + 54);
+    g.font = "10px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim;
+    g.fillText(`${fmtg(a.g)} · ${par(fmtg(a.local))}`, b2.x + 12, LY.sy + 78);
+    g.font = "700 17px ui-monospace,Menlo,monospace"; g.fillStyle = P.text;
+    g.fillText("δ = " + fmtg(z.g), b2.x + 12, LY.sy + 104);
+  } else ghost(g, P, b2.x, LY.sy, b2.w, LY.strip, `δ${SUP[l]}${SUB[j]}`);
+
+  /* 4 — and onto the weights that feed it */
+  const b3 = {x:LY.cx[3], w:LY.cw[3]};
+  if(gSeen){
+    card(g, P, b3.x, LY.sy, b3.w, LY.strip, 1);
+    g.textAlign = "left"; g.font = "600 10.5px ui-monospace,Menlo,monospace"; g.fillStyle = P.gradCss;
+    g.fillText(`∂L/∂w${SUB[j]}ᵢ = δ${SUP[l]}${SUB[j]} · ${aName(l-1)}ᵢ`, b3.x + 12, LY.sy + 15);
+    const gy = LY.sy + 26;
+    for(let i=0;i<nin;i++)
+      gradRow(g, P, b3, gy + i*rh + rh/2, `∂L/∂w${SUB[j]}${SUB[i]}`,
+              `${fmtg(z.g)} · ${par(fmt(ly.in[i].d))}`, ly.W[j][i].g, rh,
+              S.sel.k === "w" && S.sel.l === l && S.sel.j === j && S.sel.i === i);
+    gradRow(g, P, b3, gy + nin*rh + rh/2, `∂L/∂b${SUB[j]}`, `${fmtg(z.g)} · 1`, ly.B[j].g, rh,
+            S.sel.k === "b" && S.sel.l === l && S.sel.j === j);
+  } else ghost(g, P, b3.x, LY.sy, b3.w, LY.strip, `∂L/∂W${SUP[l]}`);
+}
+
+function gradRow(g, P, box, y, lhs, mid, val, rh, sel){
+  g.fillStyle = gramp(val, P, 0.03, 0.34);
+  roundRect(g, box.x + 8, y - rh/2 + 1, box.w - 16, rh - 3, 5); g.fill();
+  if(sel){ g.strokeStyle = P.accent; g.lineWidth = 1.4;
+           roundRect(g, box.x + 8, y - rh/2 + 1, box.w - 16, rh - 3, 5); g.stroke(); }
+  g.textAlign = "left"; g.font = "600 10px ui-monospace,Menlo,monospace"; g.fillStyle = P.gradCss;
+  g.fillText(lhs, box.x + 14, y);
+  g.font = "9.5px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim2;
+  g.fillText(mid, box.x + 74, y);
+  g.textAlign = "right"; g.font = "700 11px ui-monospace,Menlo,monospace"; g.fillStyle = P.text;
+  g.fillText(fmtg(val), box.x + box.w - 14, y);
+}
+
+// the step, for a net: every parameter moves, so the row shows the one you have
+// selected doing it and the size of the move the rest are making
+function netUpdate(g, P, y){
+  const s = S.sel, cur = s.k === "b" ? S.B[s.l][s.j] : S.W[s.l][s.j][s.i];
+  const gr  = s.k === "b" ? GB[s.l][s.j] : GW[s.l][s.j][s.i];
+  const nm  = s.k === "b" ? `b${SUP[s.l]}${SUB[s.j]}` : `w${SUP[s.l]}${SUB[s.j]}${SUB[s.i]}`;
+  g.fillStyle = P.frame; roundRect(g, 8, y, LY.right - 8, UH, 9); g.fill();
+  g.strokeStyle = P.frameLine; g.lineWidth = 1.2; roundRect(g, 8, y, LY.right - 8, UH, 9); g.stroke();
+  g.textAlign = "left"; g.font = "9.5px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim;
+  g.fillText(`${PH.u + 1})  W ← W − η·∂L/∂W   with η = ${fmt(S.lr)}, every one of the ${nparams()} `
+           + `parameters at once, gradients averaged over all ${S.data.length} points`, 18, y + 11);
+  const txt = `${nm} ← ${fmt(cur)} − ${fmt(S.lr)}·${par(fmtg(gr))} = ${fmt(cur - S.lr*gr)}`;
+  g.font = "700 11px ui-monospace,Menlo,monospace";
+  const w = g.measureText(txt).width + 16;
+  g.fillStyle = ramp(cur - S.lr*gr, WMAX, P, 0.05, 0.38);
+  roundRect(g, 18, y + 17, w, 17, 5); g.fill();
+  g.fillStyle = P.text; g.fillText(txt, 26, y + 26);
+  g.font = "10px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim2;
+  g.fillText(`— and the same for the other ${nparams() - 1}`, 18 + w + 10, y + 26);
+}
+
 /* ---------- pieces ---------- */
 function bandLabel(g, P, txt, x, y){
   g.textAlign = "left"; g.textBaseline = "middle";
@@ -617,10 +1077,11 @@ function waiting(g, P, x, y, w, h, txt){
 }
 
 // one line of the weighted sum, tinted by the product it contributes
-function termRow(g, P, x, w, y, lhs, mid, val, alpha){
+function termRow(g, P, x, w, y, lhs, mid, val, alpha, rh){
+  rh = rh || ROWH;
   g.globalAlpha = alpha;
   g.fillStyle = ramp(val, ZMAX, P, 0.04, 0.34);
-  roundRect(g, x + 8, y - ROWH/2 + 1, w - 16, ROWH - 3, 5); g.fill();
+  roundRect(g, x + 8, y - rh/2 + 1, w - 16, rh - 3, 5); g.fill();
   g.textAlign = "left"; g.font = "600 10.5px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim;
   g.fillText(lhs, x + 14, y);
   if(mid){
@@ -839,8 +1300,9 @@ function dot(g, P, x, y){
   g.strokeStyle = P.panel; g.lineWidth = 1.2; g.stroke();
 }
 
-function sparkAct(g, P, x, y, w, h){
-  const A = ACT[S.act], z = G.z.d, a = G.a.d;
+function sparkAct(g, P, x, y, w, h, A, z, a, local){
+  A = A || ACT[S.act];
+  if(z === undefined){ z = G.z.d; a = G.a.d; local = G.a.local; }
   const r = Math.max(3, Math.abs(z)*1.4);
   const xr = [-r, r];
   let lo = Infinity, hi = -Infinity;
@@ -855,7 +1317,7 @@ function sparkAct(g, P, x, y, w, h){
   sparkCurve(g, P, u => { const zz = xr[0] + u*(xr[1] - xr[0]); return [zz, A.raw(zz)]; },
              sx, sy, x, y, w, h, 72);
   g.save(); g.beginPath(); g.rect(x, y, w, h); g.clip();
-  tangent(g, P, sx, sy, z, a, G.a.local, (xr[1] - xr[0])*0.22);
+  tangent(g, P, sx, sy, z, a, local, (xr[1] - xr[0])*0.22);
   g.setLineDash([2,3]); g.strokeStyle = P.dim2; g.lineWidth = 1;
   seg(g, sx(z), y + h, sx(z), sy(a));
   g.setLineDash([]);
@@ -865,8 +1327,9 @@ function sparkAct(g, P, x, y, w, h){
   g.fillText("z", Math.max(x + 6, Math.min(x + w - 6, sx(z))), y + h - 6);
 }
 
-function sparkLoss(g, P, x, y, w, h){
-  const a = G.a.d, t = G.d.t, e = a - t;
+function sparkLoss(g, P, x, y, w, h, a, t){
+  if(a === undefined){ a = G.a.d; t = G.d.t; }
+  const e = a - t;
   const r = Math.max(0.7, Math.abs(e)*1.6);
   const xr = [t - r, t + r], yr = [-r*r*0.16, r*r*1.1];
   const sx = v => x + (v - xr[0])/(xr[1] - xr[0])*w;
@@ -959,7 +1422,15 @@ function notes(){
              lands further out than the last. Lower η and reset.`];
 
   const out = [];
-  const maxSlope = Math.max(0, ...GS.map(g => Math.abs(g.a.local)));
+  if(isNet() && S.act === "linear")
+    out.push(`<b>The hidden layers are linear, so the whole stack collapses.</b> W²(W¹x + b¹) + b² is just
+              another matrix times x — depth buys nothing at all without a nonlinearity, and the boundary
+              stays a straight line however many layers you add.`);
+  const slopes = [];
+  for(const g of GS)
+    if(isNet()) for(const ly of g.layers) for(const a of ly.a) slopes.push(Math.abs(a.local));
+    else slopes.push(Math.abs(g.a.local));
+  const maxSlope = Math.max(0, ...slopes);
   if(maxSlope < 1e-3 && S.act !== "linear")
     out.push(S.act === "relu"
       ? `<b>Dead ReLU.</b> z is negative at every point, so the unit outputs 0 and blocks the gradient
@@ -1068,18 +1539,35 @@ function curvePanel(g, P, B){
   g.restore();
 }
 
-// two inputs: the neuron is a plane through a squash, so its boundary is a line
+// two inputs: what the model says over the whole plane. One neuron can only
+// split it with a straight line; a hidden layer bends that line, so the same
+// panel shows both — the heat map is the model, whatever the model is.
 function planePanel(g, P, B){
   const xr = XR2, yr = XR2;
-  const CELL = 6, nx = Math.ceil(B.w/CELL), ny = Math.ceil(B.h/CELL);
+  const CELL = isNet() ? 5 : 6, nx = Math.ceil(B.w/CELL), ny = Math.ceil(B.h/CELL);
+  const at = (i, j) => predict([xr[0] + (i + 0.5)/nx*(xr[1] - xr[0]),
+                                yr[1] - (j + 0.5)/ny*(yr[1] - yr[0])]);
+  const grid = [];
   g.save();
   g.beginPath(); g.rect(B.x, B.y, B.w, B.h); g.clip();       // the last row and column overhang
-  for(let i=0;i<nx;i++) for(let j=0;j<ny;j++){
-    const x1 = xr[0] + (i + 0.5)/nx*(xr[1] - xr[0]);
-    const x2 = yr[1] - (j + 0.5)/ny*(yr[1] - yr[0]);
-    const a = ACT[S.act].raw(S.w[0]*x1 + S.w[1]*x2 + S.b);
-    g.fillStyle = ramp(a - 0.5, 0.5, P, 0.02, 0.38);          // 0.5 is the boundary, so centre on it
-    g.fillRect(B.x + i*CELL, B.y + j*CELL, CELL, CELL);
+  for(let i=0;i<nx;i++){
+    grid.push([]);
+    for(let j=0;j<ny;j++){
+      const a = at(i, j);
+      grid[i].push(a);
+      g.fillStyle = ramp(a - 0.5, 0.5, P, 0.02, 0.38);        // 0.5 is the boundary, so centre on it
+      g.fillRect(B.x + i*CELL, B.y + j*CELL, CELL, CELL);
+    }
+  }
+  // where the model crosses 0.5 — for a net the boundary is a curve, so it gets
+  // traced out of the grid rather than solved for
+  if(isNet()){
+    g.fillStyle = P.accent;
+    for(let i=0;i<nx-1;i++) for(let j=0;j<ny-1;j++){
+      const c = grid[i][j] >= 0.5;
+      if(c !== (grid[i+1][j] >= 0.5) || c !== (grid[i][j+1] >= 0.5))
+        g.fillRect(B.x + i*CELL + CELL/2 - 1, B.y + j*CELL + CELL/2 - 1, 2.2, 2.2);
+    }
   }
   g.restore();
 
@@ -1101,13 +1589,14 @@ function planePanel(g, P, B){
     }
     g.setLineDash([]); g.restore();
   };
-  if(S.track.length) bound(S.track[0].w, S.track[0].b, P.dim2, true, 1);
-  bound(S.w, S.b, P.accent, false, 2);
+  if(!isNet()){
+    if(S.track.length) bound(S.track[0].w, S.track[0].b, P.dim2, true, 1);
+    bound(S.w, S.b, P.accent, false, 2);
+  }
 
   S.data.forEach((d, i) => {
     const p = plotXY(d);
-    const a = ACT[S.act].raw(S.w[0]*d.x[0] + S.w[1]*d.x[1] + S.b);
-    const r = a - d.t;
+    const r = predict(d.x) - d.t;
     g.lineWidth = 1 + 5*Math.min(1, Math.abs(r));            // the ring is the error
     g.strokeStyle = ramp(r, 1, P, 0.10, 0.95);
     g.beginPath(); g.arc(p.x, p.y, 8, 0, 6.2832); g.stroke();
@@ -1146,9 +1635,9 @@ function lossPanel(g, P, B){
 const fv = v => `<span class="fv">${fmt(v)}</span>`;
 const wv = v => `<span class="wv">${fmt(v)}</span>`;
 const gv = v => `<span class="gv">${fmtg(v)}</span>`;
-// ∂L/∂a must not be shouted into ∂L/∂A, so a label carrying a derivative keeps
-// its own case
-const mlbl = l => `<span class="mlbl${l.indexOf("∂") < 0 ? "" : " raw"}">${l}</span>`;
+// ∂L/∂a must not be shouted into ∂L/∂A, nor δ into Δ — any label carrying a
+// symbol keeps its own case
+const mlbl = l => `<span class="mlbl${/[^\x00-\x7F]/.test(l) ? " raw" : ""}">${l}</span>`;
 function mrow(phase, label, html){
   return `<div class="mrow${phase === S.phase ? " now" : ""}">${mlbl(label)}
           <span class="mval">${html}</span></div>`;
@@ -1183,10 +1672,151 @@ function selInfo(){
           local:G.d.x[s.i], localTxt:"x" + SUB[s.i]};
 }
 
+/* ==================== the sheet, for a net ====================
+   A layer is a matrix times a vector, so the sheet draws matrices — real ones,
+   with brackets, their shapes underneath and the page's colour ramp in the
+   cells. Every equation is the same one the canvas above is drawing; here you
+   see the whole layer at once instead of one neuron of it, and the shapes make
+   the arithmetic obvious: (4×2)·(2×1) can only come out (4×1).
+
+   The neuron you have selected is a row, so it lights up in every matrix it
+   appears in — follow one row across and you have followed one neuron.
+   ============================================================== */
+function mat(name, rows, cols, get, o){
+  o = o || {};
+  const cells = [];
+  for(let j=0;j<rows;j++)
+    for(let i=0;i<cols;i++){
+      const v = get(j, i);
+      const hi = o.cell && o.cell.j === j && o.cell.i === i ? " hi"
+               : o.row === j ? (o.grad ? " hi2" : " hi") : "";
+      cells.push(`<span class="cell${hi}" style="background:${o.fill(v)}">${o.txt(v)}</span>`);
+    }
+  return `<span class="mat"><span class="mname">${name}</span>` +
+         `<span class="mgrid" style="grid-template-columns:repeat(${cols},minmax(0,1fr))">` +
+         cells.join("") + `</span><span class="mdim">${rows}×${cols}</span></span>`;
+}
+const mop = (s, sm) => `<span class="mop${sm ? " sm" : ""}">${s}</span>`;
+
+function netMath(){
+  const P = palette(), p = S.phase, out = [], sh = shape(), nl = NLAY();
+  const l = S.selN.l, j = S.selN.j, sel = S.sel;
+  const V_ = v => ramp(v, 1.2, P, 0.05, 0.42);          // an activation
+  const Z_ = v => ramp(v, ZMAX, P, 0.05, 0.42);         // a pre-activation
+  const W_ = v => ramp(v, WMAX, P, 0.05, 0.42);         // a parameter
+  const X_ = v => ramp(v, XMAX, P, 0.05, 0.42);         // an input
+  const D_ = v => gramp(v, P, 0.05, 0.42);              // anything backward
+  const num = v => fmt(v);
+  const grd = v => fmtg(v);
+  const eq = (phase, label, parts) =>
+    `<div class="mrow${phase === S.phase ? " now" : ""}">${mlbl(label)}
+     <span class="meq">${parts.join("")}</span></div>`;
+  // the row this neuron occupies, in whichever layer it lives
+  const row = k => k === l ? j : undefined;
+
+  out.push(mrow(-1, "point", `<b>${S.sample + 1} of ${S.data.length}</b>
+    <span style="color:var(--dim2)">— hover a point on the boundary plot, or use ◀ ▶.
+    Point at a wire or a neuron and it lights up in every matrix below.</span>`));
+
+  /* ---- forward: one matrix product per layer ---- */
+  for(let k=0;k<nl;k++){
+    if(p < PH["f" + k]) break;
+    const ly = G.layers[k], m = sh[k], n = sh[k+1];
+    const inFill = k ? V_ : X_;
+    out.push(eq(PH["f" + k], `${k + 1}) layer ${k + 1}`, [
+      mat(`z${SUP[k]}`, n, 1, r => ly.z[r].d, {fill:Z_, txt:num, row:row(k)}),
+      mop("="),
+      mat(`W${SUP[k]}`, n, m, (r, c) => S.W[k][r][c],
+          {fill:W_, txt:num, row:row(k),
+           cell: sel.k === "w" && sel.l === k ? {j:sel.j, i:sel.i} : null}),
+      mop("·"),
+      mat(aName(k-1), m, 1, r => ly.in[r].d, {fill:inFill, txt:num}),
+      mop("+"),
+      mat(`b${SUP[k]}`, n, 1, r => S.B[k][r], {fill:W_, txt:num, row:row(k)}),
+      mop(`→ ${ly.A.lbl} →`, true),
+      mat(aName(k), n, 1, r => ly.a[r].d, {fill:V_, txt:num, row:row(k)}),
+    ]));
+  }
+
+  if(p >= PH.L) out.push(erow(PH.L, `${PH.L + 1}) loss`, [
+    tt("L", "", {cls:"hd"}), op("="), op("("),
+    tt("a", fv(G.out.d), {fill:ramp(G.out.d, 1.2, P, 0.05, 0.3)}), op("−"),
+    tt("t", fv(G.d.t), {fill:ramp(G.d.t, 1.2, P, 0.05, 0.3)}), op(")²"),
+    op("="), res(fmt(G.L.d, 4)),
+    op("&nbsp;&nbsp;"), tt(`batch L — the mean over all ${S.data.length}`,
+                           `<b>${fmt(LOSS, 4)}</b>`, {cls:"op"}),
+  ]));
+
+  if(p >= PH.ga) out.push(erow(PH.ga, `${PH.ga + 1}) ∂L/∂a`, [
+    tt(`∂L/∂${aName(nl-1)}`, "", {cls:"hd"}), op("="), op("2 ("),
+    tt("a", fv(G.out.d)), op("−"), tt("t", fv(G.d.t)), op(")"),
+    op("="), res(fmtg(G.out.g)),
+  ]));
+
+  /* ---- backward: the same products, transposed ---- */
+  for(let k=nl-1;k>=0;k--){
+    if(p < PH["d" + k]) break;
+    const ly = G.layers[k], m = sh[k], n = sh[k+1];
+
+    // δ = ∂L/∂a ⊙ f′(z), elementwise — one number per neuron, nothing more
+    out.push(eq(PH["d" + k], `${PH["d" + k] + 1}) δ${SUP[k]}`, [
+      mat(`δ${SUP[k]}`, n, 1, r => ly.z[r].g, {fill:D_, txt:grd, row:row(k), grad:1}),
+      mop("="),
+      mat(`∂L/∂${aName(k)}`, n, 1, r => ly.a[r].g, {fill:D_, txt:grd, row:row(k), grad:1}),
+      mop("⊙"),
+      mat(`f′(z${SUP[k]})`, n, 1, r => ly.a[r].local, {fill:D_, txt:grd, row:row(k), grad:1}),
+      `<span class="mop sm">elementwise — every neuron keeps its own</span>`,
+    ]));
+
+    if(p < PH["g" + k]) break;
+    // the outer product: a column times a row is the whole weight matrix
+    out.push(eq(PH["g" + k], `${PH["g" + k] + 1}) ∂L/∂W${SUP[k]}`, [
+      mat(`∂L/∂W${SUP[k]}`, n, m, (r, c) => ly.W[r][c].g,
+          {fill:D_, txt:grd, row:row(k), grad:1,
+           cell: sel.k === "w" && sel.l === k ? {j:sel.j, i:sel.i} : null}),
+      mop("="),
+      mat(`δ${SUP[k]}`, n, 1, r => ly.z[r].g, {fill:D_, txt:grd, row:row(k), grad:1}),
+      mop("·"),
+      mat(`${aName(k-1)}ᵀ`, 1, m, (r, c) => ly.in[c].d, {fill:k ? V_ : X_, txt:num}),
+      `<span class="mop sm">and ∂L/∂b${SUP[k]} = δ${SUP[k]}</span>`,
+    ]));
+
+    // and the one equation a network adds: the gradient handed down a layer
+    if(k > 0) out.push(eq(PH["g" + k], "", [
+      mat(`∂L/∂${aName(k-1)}`, m, 1, r => G.layers[k-1].a[r].g,
+          {fill:D_, txt:grd, row:row(k-1), grad:1}),
+      mop("="),
+      mat(`W${SUP[k]}ᵀ`, m, n, (r, c) => S.W[k][c][r], {fill:W_, txt:num}),
+      mop("·"),
+      mat(`δ${SUP[k]}`, n, 1, r => ly.z[r].g, {fill:D_, txt:grd, grad:1}),
+      `<span class="mop sm">the same wires, transposed — this is the whole recursion</span>`,
+    ]));
+  }
+
+  /* ---- the step ---- */
+  if(p >= PH.u){
+    const k = sel.l;
+    out.push(eq(PH.u, `${PH.u + 1}) update`, [
+      mat(`W${SUP[k]}`, sh[k+1], sh[k], (r, c) => S.W[k][r][c] - S.lr*GW[k][r][c],
+          {fill:W_, txt:num, cell: sel.k === "w" ? {j:sel.j, i:sel.i} : null}),
+      mop("="),
+      mat(`W${SUP[k]}`, sh[k+1], sh[k], (r, c) => S.W[k][r][c], {fill:W_, txt:num}),
+      mop("−"),
+      `<span class="mop">${fmt(S.lr)}</span>`, mop("·"),
+      mat(`∂L/∂W${SUP[k]}`, sh[k+1], sh[k], (r, c) => GW[k][r][c], {fill:D_, txt:grd, grad:1}),
+      `<span class="mop sm">the batch mean, over all ${S.data.length} points —
+       and the same for every other layer</span>`,
+    ]));
+  }
+
+  el("readout").innerHTML = out.join("");
+}
+
 /* The sheet is written symbolically once — the letters never move. Under each
    letter hangs the number it is holding for this point, and those are the only
    things that change as you step, drag a wire or scrub through the data. */
 function renderMath(){
+  if(isNet()) return netMath();
   const P = palette(), A = ACT[S.act], p = S.phase, out = [];
   const gfill = v => gramp(v, P, 0.06, 0.34);
 
@@ -1281,12 +1911,70 @@ function renderMath(){
   el("readout").innerHTML = out.join("");
 }
 
+/* ---------- the chain, for a weight somewhere inside a net ----------
+   Walk from the weight up to the loss. Every layer above it that has a single
+   neuron contributes two more factors, so the product visibly grows with depth —
+   which is exactly why deep networks have a gradient problem. Where the layer
+   above has several neurons the paths have to be added rather than multiplied,
+   and that factor is shown as the sum it is instead of being faked.
+   -------------------------------------------------------------------- */
+function netChain(){
+  const P = palette(), p = S.phase, sh = shape(), nl = NLAY(), s = S.sel;
+  const l = s.l, j = s.j;
+  const gfl = v => gramp(v, P, 0.06, 0.34);
+  const F = [];
+
+  const ly = G.layers[l];
+  // the output layer holds one neuron, so from the layer below it there is
+  // exactly one path to the loss and the product can be written out in full.
+  // Further down the paths fan out and have to be summed instead.
+  if(l >= nl - 2){
+    const top = G.layers[nl-1];
+    F.push({at:PH.ga, sym:`∂L/∂a${SUP[nl-1]}`, rule:"2(a − t)",
+            num:fmtg(top.a[0].g), fill:gfl(top.a[0].g)});
+    if(l === nl - 2){
+      F.push({at:PH["d" + (nl-1)], sym:`f′(z${SUP[nl-1]})`, rule:top.A.der,
+              num:fmtg(top.a[0].local), fill:gfl(top.a[0].local)});
+      F.push({at:PH["g" + (nl-1)], sym:`w${SUP[nl-1]}${SUB[0]}${SUB[j]}`,
+              rule:"the wire out of it", val:true,
+              num:fmt(S.W[nl-1][0][j]), fill:ramp(S.W[nl-1][0][j], WMAX, P, 0.06, 0.34)});
+    }
+  } else {
+    F.push({at:PH["d" + l], sym:`∂L/∂${aName(l)}${SUB[j]}`,
+            rule:sh[l+2] > 1 ? `Σ over the ${sh[l+2]} paths above` : "the one path above",
+            num:fmtg(ly.a[j].g), fill:gfl(ly.a[j].g)});
+  }
+  F.push({at:PH["d" + l], sym:`f′(z${SUP[l]}${SUB[j]})`, rule:ly.A.der,
+          num:fmtg(ly.a[j].local), fill:gfl(ly.a[j].local)});
+  const loc = s.k === "b" ? 1 : ly.in[s.i].d;
+  F.push({at:PH["g" + l], val:true,
+          sym:s.k === "b" ? "∂z/∂b" : `${aName(l-1)}${SUB[s.i]}`,
+          rule:s.k === "b" ? "1" : "the value it multiplies",
+          num:fmt(loc), fill:ramp(loc, XMAX, P, 0.06, 0.34)});
+
+  const nm = s.k === "b" ? `b${SUP[l]}${SUB[j]}` : `w${SUP[l]}${SUB[j]}${SUB[s.i]}`;
+  const node = s.k === "b" ? ly.B[j] : ly.W[j][s.i];
+  const html = [`<span class="lhs">∂L/∂${nm}</span><span class="dot">=</span>`];
+  F.forEach((f, i) => {
+    if(i) html.push(`<span class="dot">·</span>`);
+    const done = p >= f.at && !diverged();
+    const cls = ["cbf", f.val ? "val" : "", done ? "" : "off",
+                 p === f.at ? "now" : ""].filter(Boolean).join(" ");
+    html.push(`<span class="${cls}"${done ? ` style="background:${f.fill}"` : ""}>` +
+              `<b>${f.sym}</b><i>${f.rule}</i><u>${done ? f.num : "?"}</u></span>`);
+  });
+  html.push(`<span class="dot">=</span>`,
+            `<span class="out">${p >= PH["g" + l] && !diverged() ? fmtg(node.g) : "?"}</span>`);
+  el("chainbar").innerHTML = html.join("");
+}
+
 /* ---------- the chain rule, large, on top of the diagram ----------
    Always the same three factors in the same order. Each stays greyed until the
    backward pass has actually produced it, so stepping fills the product in from
    the left — which is the order the gradient is multiplied in.
    ----------------------------------------------------------------- */
 function renderChainBar(){
+  if(isNet()) return netChain();
   const P = palette(), A = ACT[S.act], s = selInfo(), p = S.phase;
   const F = [
     {at:PH.ga, chip:"dLda", sym:"∂L/∂a", rule:"2(a − t)",
@@ -1339,6 +2027,29 @@ const CAPS = {
       them. Press ▶ to apply it — the curve moves and one point lands on the loss plot.`,
 };
 
+// a net has one caption per kind of station, not per station
+function caption(){
+  const ph = PHASES[S.phase];
+  if(!isNet()) return CAPS[ph.id];
+  const k = ph.id[0], l = ph.l, nl = NLAY();
+  if(k === "f") return `<b>Layer ${l + 1} fires.</b> Every neuron in the column does exactly what the single
+      neuron does — sum its wires, add its bias, squash. The four cards below are that arithmetic for the
+      neuron you have selected; <b>click another node</b> and they re-point at it.`;
+  if(ph.id === "L")  return CAPS.L;
+  if(ph.id === "ga") return CAPS.ga;
+  if(k === "d") return `<b>Through the activation of layer ${l + 1}.</b> Each neuron multiplies the gradient
+      that reached it by its own f′(z) — the violet tangent in the second card. That product is
+      <b>δ</b>, one number per neuron, and it is all the layer below needs to know.
+      ${l === nl - 1 ? "" : `∂L/∂a here is a <b>sum over every path</b> to the loss, which is the one
+      equation a network adds to a neuron.`}`;
+  if(k === "g") return `<b>Onto layer ${l + 1}'s weights.</b> ∂L/∂w is δ for the neuron the wire enters,
+      times the value the wire carried in — so each wire now has a second, violet lane running the other
+      way, as thick as its gradient. ${l ? `The same δ, pushed back through Wᵀ, becomes ∂L/∂a for the layer
+      below, and the whole thing repeats.` : `There is nothing below layer 1, so the pass stops here.`}`;
+  return `<b>The update.</b> Every one of the ${nparams()} parameters moves at once, each by η times its own
+      gradient averaged over all ${S.data.length} points. Press ▶ to apply it and watch the boundary bend.`;
+}
+
 function slider(id, label, cls, min, max, step, hint){
   return `<div class="ctrl" id="bp_ctrl_${id}">
     <label for="bp_r_${id}"><span class="${cls}">${label}</span><b id="bp_v_${id}"></b></label>
@@ -1347,12 +2058,30 @@ function slider(id, label, cls, min, max, step, hint){
   </div>`;
 }
 
+/* the rail is rebuilt whenever the architecture changes, because the steps are
+   the architecture — two more of them for every layer you add. Past eight of
+   them the per-button equations are unreadable anyway, so they come off and the
+   current step's equation is printed once, beside the controls. */
+function buildRail(){
+  const many = PHASES.length > 8;
+  let grp = "", html = [];
+  PHASES.forEach((p, i) => {
+    if(p.grp !== grp){ grp = p.grp; html.push(`<span class="rsep">${grp}</span>`); }
+    html.push(`<button data-phase="${i}"><b>${i + 1}) ${p.lbl}</b>` +
+              (many ? "" : `<i id="bp_eq${i}"></i>`) + `</button>`);
+  });
+  el("rail").innerHTML = html.join("");
+  el("rail").classList.toggle("tight", many);
+  document.querySelectorAll("#bp_rail button").forEach(b =>
+    b.addEventListener("click", () => { stop(); S.phase = +b.dataset.phase; refresh(); }));
+}
+
 function buildControls(){
+  el("netseg").innerHTML = Object.entries(NETS).map(([k, d]) =>
+    `<button data-net="${k}"><b>${d.lbl}</b><i>${d.note}</i></button>`).join("");
   el("setseg").innerHTML = Object.entries(SETS).map(([k, d]) =>
     `<button data-set="${k}"><b>${d.name}</b><i>${d.note}</i></button>`).join("");
-
-  el("rail").innerHTML = PHASES.map((p, i) =>
-    `<button data-phase="${i}"><b>${i + 1}) ${p.lbl}</b><i id="bp_eq${i}"></i></button>`).join("");
+  buildRail();
 
   el("wctrls").innerHTML =
     slider("w0", "w₁", "wv", -4, 4, 0.05) +
@@ -1369,10 +2098,12 @@ function buildControls(){
   segs("setseg", "set", v => { stop(); loadSet(v); refresh(); });
   segs("actseg", "act", v => { S.act = v; refresh(); });
   segs("lrseg",  "lr",  v => { S.lr = +v; refresh(); });
-  segs("rail", "phase", v => { stop(); S.phase = +v; refresh(); });
+  segs("spdseg", "spd", v => { S.spd = +v; if(S.playing){ stop(); start(); } syncControls(); });
+  segs("netseg", "net", v => { stop(); loadNet(v); buildRail(); refresh(); });
+  segs("widthseg", "w", v => { stop(); S.width = +v; loadSet(S.set); buildRail(); refresh(); });
 
   el("rand").addEventListener("click", randomise);
-  el("train").addEventListener("click", () => train(50));
+  el("train").addEventListener("click", () => train(isNet() ? 200 : 50));
   el("reset").addEventListener("click", reset);
   el("prev").addEventListener("click", () => { stop(); S.phase = Math.max(0, S.phase - 1); refresh(); });
   el("next").addEventListener("click", () => { stop(); step(); });
@@ -1393,8 +2124,21 @@ function step(){
   else { applyUpdate(); S.phase = 0; }
   refresh();
 }
+/* how fast ▶ runs. Up to 2× it walks the stations one at a time; past that the
+   stations would be a blur, so it stops walking them and just trains — which is
+   the point of the fast settings: watch the boundary and the loss, not the
+   arithmetic. */
+const SPEEDS = {1:{ms:850, per:0}, 2:{ms:400, per:0}, 10:{ms:110, per:1}, 50:{ms:60, per:5}};
 let timer = 0;
-function start(){ S.playing = true; timer = setInterval(step, 850); syncControls(); }
+function playTick(){
+  const sp = SPEEDS[S.spd];
+  if(!sp.per) return step();
+  for(let k=0;k<sp.per && !diverged();k++) applyUpdate();
+  S.phase = PH.u;                            // park on the step it is repeating
+  refresh();
+  if(diverged()) stop();
+}
+function start(){ S.playing = true; timer = setInterval(playTick, SPEEDS[S.spd].ms); syncControls(); }
 // the tab bar stops the loop on the way out, which can happen before the
 // controls have ever been built — hence the guard
 function stop(){
@@ -1407,40 +2151,87 @@ function syncControls(){
   const set = (id, v) => { el("r_" + id).value = v; el("v_" + id).textContent = fmt(v); };
   set("w0", S.w[0]); set("w1", S.w[1]); set("b", S.b);
   el("ctrl_w1").classList.toggle("off", S.nin < 2);
+  el("wctrls").classList.toggle("gone", isNet());      // a net has too many to slide
+  el("paramhead").classList.toggle("gone", isNet());
+  el("widthwrap").classList.toggle("gone", !isNet());
 
   const on = (id, attr, val) => document.querySelectorAll(`#bp_${id} button`).forEach(b =>
     b.classList.toggle("on", b.dataset[attr] === String(val)));
   on("setseg", "set", S.set);
   on("actseg", "act", S.act);
   on("lrseg",  "lr",  S.lr);
+  on("spdseg", "spd", S.spd);
+  on("netseg", "net", S.net);
+  on("widthseg", "w", S.width);
+  // a dataset a single neuron cannot do is not offered to a single neuron
+  document.querySelectorAll("#bp_setseg button").forEach(b => {
+    const f = SETS[b.dataset.set].for;
+    b.classList.toggle("off", f !== "both" && f !== (isNet() ? "net" : "one"));
+  });
 
+  const many = PHASES.length > 8;
   document.querySelectorAll("#bp_rail button").forEach((b, i) => {
     b.classList.toggle("on", i === S.phase);
     b.classList.toggle("done", i < S.phase);
-    el("eq" + i).textContent = PHASES[i].eq();
+    if(!many) el("eq" + i).textContent = PHASES[i].eq();
   });
+  el("stepeq").textContent = many ? `${S.phase + 1})  ${PHASES[S.phase].eq()}` : "";
 
-  el("acthint").innerHTML = ACT[S.act].hint;
-  el("vizcap").innerHTML = CAPS[PHASES[S.phase].id];   // not in paint(), which runs per frame
+  el("acthint").innerHTML = (isNet()
+    ? `<b>The hidden layers</b> use this; the output neuron is always a sigmoid, since the targets are 0/1.
+       <br>` : "") + ACT[S.act].hint;
+  el("vizcap").innerHTML = caption();                  // not in paint(), which runs per frame
   el("play").textContent = S.playing ? "❚❚ pause" : "▶ play";
   el("prev").disabled = S.phase === 0;
   el("slabel").textContent = `point ${S.sample + 1} / ${S.data.length}`;
   el("trails").checked = S.trails;
-  el("stephint").innerHTML = S.phase === PHASES.length - 1
-    ? `▶ applies the update and starts the next pass.`
-    : `${S.steps} update${S.steps === 1 ? "" : "s"} so far.`;
+  el("ctrl_trails").classList.toggle("gone", isNet());
+  el("stephint").innerHTML = S.spd > 2
+    ? `<b>${S.steps}</b> updates — ▶ trains without stopping at the stations.`
+    : S.phase === PHASES.length - 1
+      ? `▶ applies the update and starts the next pass.`
+      : `${S.steps} update${S.steps === 1 ? "" : "s"} so far.`;
+  el("train").innerHTML = `&#9654; train &times;${isNet() ? 200 : 50}`;
   el("trainhint").innerHTML = diverged()
     ? `<span class="err">Diverged — reset before training further.</span>`
-    : `Runs 50 full passes over all ${S.data.length} points.`;
+    : `Runs ${isNet() ? 200 : 50} full passes over all ${S.data.length} points.`;
   // what this dataset is and why it is worth fitting — it belongs beside the
   // button that picks it, not under the plots
   el("setnote").innerHTML = `<b>${S.data.length}</b> points, <b>${S.nin}</b> input${S.nin === 1 ? "" : "s"}
-    — the neuron is fitted to all of them at once.<br><br>${SETS[S.set].why}`;
+    — ${isNet() ? "the whole net is" : "the neuron is"} fitted to all of them at once.
+    <br><br>${SETS[S.set].why}`;
 }
 
 /* ============================== interaction ============================== */
+// on a net: the nodes pick whose stations the strip shows, the wires pick which
+// weight the chain rule is written for — and, exactly as with one neuron, a wire
+// is also the handle that changes it
+function hitNet(ev){
+  const r = el("viz").getBoundingClientRect();
+  const x = (ev.clientX - r.left)*(LY.w/r.width), y = (ev.clientY - r.top)*(LY.h/r.height);
+  const sh = shape(), nl = NLAY();
+
+  for(let l=0;l<=nl;l++)
+    for(let j=0;j<sh[l];j++)
+      if(Math.hypot(x - nodeX(l), y - nodeY(l, j)) < NR + 6){
+        if(l === 0) return {part:`x${j}`, node:null};
+        return {part:`n${l-1}_${j}`, node:{l:l-1, j}};
+      }
+
+  for(let l=0;l<nl;l++)
+    for(let j=0;j<sh[l+1];j++)
+      for(let i=0;i<sh[l];i++){
+        const s = {x0:nodeX(l) + NR, y0:nodeY(l, i), x1:nodeX(l+1) - NR, y1:nodeY(l+1, j)};
+        if(segDist(x, y, s) < 6)
+          return {part:`w${l}_${j}_${i}`, sel:{k:"w", l, j, i}, node:{l, j},
+                  drag:{k:"w", l, j, i}};
+      }
+  return null;
+}
+
 function hit(ev){
   if(!LY) return null;
+  if(isNet()) return hitNet(ev);
   const r = el("viz").getBoundingClientRect();
   const x = (ev.clientX - r.left)*(LY.w/r.width), y = (ev.clientY - r.top)*(LY.h/r.height);
 
@@ -1500,23 +2291,31 @@ function wire(){
     if(S.drag){                                     // a weight is being dragged on its own wire
       const dy = e.clientY - S.drag.y0;
       const v = Math.max(-4, Math.min(4, S.drag.v0 - dy*0.012));
-      if(S.drag.k === "b") S.b = v; else S.w[S.drag.i] = v;
+      const D = S.drag;
+      if(isNet()) S.W[D.l][D.j][D.i] = v;
+      else if(D.k === "b") S.b = v;
+      else S.w[D.i] = v;
       refresh();
       return;
     }
     const h = hit(e);
     const part = h ? h.part : null;
     const sel  = h && h.sel ? h.sel : S.sel;
-    cv.style.cursor = h && h.drag ? "ns-resize" : "default";
-    if(part === S.hover && sel.k === S.sel.k && sel.i === S.sel.i) return;
+    cv.style.cursor = h && h.drag ? "ns-resize" : (h && h.node ? "pointer" : "default");
+    const same = sel === S.sel || (sel.k === S.sel.k && sel.i === S.sel.i &&
+                                   sel.l === S.sel.l && sel.j === S.sel.j);
+    if(part === S.hover && same) return;
     S.hover = part; S.sel = sel;
+    if(h && h.node) S.selN = h.node;
     renderMath(); renderChainBar(); paint();
   });
   cv.addEventListener("mousedown", e => {
     const h = hit(e);
     if(!h || !h.drag) return;
     e.preventDefault();
-    S.drag = {...h.drag, y0: e.clientY, v0: h.drag.k === "b" ? S.b : S.w[h.drag.i]};
+    const d = h.drag;
+    S.drag = {...d, y0: e.clientY,
+              v0: isNet() ? S.W[d.l][d.j][d.i] : (d.k === "b" ? S.b : S.w[d.i])};
   });
   addEventListener("mouseup", () => { if(S.drag){ S.drag = null; refresh(); } });
   cv.addEventListener("mouseleave", () => {

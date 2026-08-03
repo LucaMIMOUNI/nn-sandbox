@@ -287,14 +287,16 @@
 <div class="hero">
   <h1>Backprop, one derivative at a time</h1>
   <p class="sub">
-    One neuron fitted to a handful of points, in <b>seven steps</b>. The <b>forward pass</b> runs left to
-    right along the top; the <b>backward pass</b> runs right to left directly underneath, one
-    multiplication per step, so every <span class="gv">gradient</span> sits below the
-    <span class="fv">value</span> it came from. Every number is tinted by its own size — <b>strong when it
-    is large, faded as it approaches zero</b> — and each derivative being multiplied is drawn as a
-    <span class="gv">tangent line</span>, flat meaning the gradient dies there. <b>Drag a wire</b> to
-    change its weight, or <b>press play</b> and watch the fit on the right settle onto the points: a dot is
-    where a point should be, the line is the neuron, and the bar between them is that point's error.
+    Start with <b>one neuron</b> and seven steps: the <b>forward pass</b> runs left to right along the top,
+    the <b>backward pass</b> runs right to left directly underneath, one multiplication per step, so every
+    <span class="gv">gradient</span> sits below the <span class="fv">value</span> it came from. Every
+    number is tinted by its own size — <b>strong when it is large, faded as it approaches zero</b> — and
+    each derivative being multiplied is drawn as a <span class="gv">tangent line</span>, flat meaning the
+    gradient dies there. Then <b>give it a hidden layer</b>: the same neuron, many times over, wired into
+    columns. Nothing new happens except that the chain rule grows two factors per layer, so the product
+    above the diagram gets longer and the gradients that reach the first layer get smaller.
+    <b>Drag any wire</b> to change its weight, <b>click a neuron</b> to write its arithmetic out, or
+    <b>press play</b> and watch the fit on the right settle onto the points.
   </p>
 
   <div class="legend">
@@ -311,15 +313,28 @@
   <!-- ============ LEFT: the problem ============ -->
   <div class="col-left side">
     <div class="panel">
+      <h2>Network</h2>
+      <div class="stack-btns" id="bp_netseg"></div>
+      <div id="bp_widthwrap" style="margin-top:8px">
+        <label style="font-size:12px;color:var(--dim)">neurons per hidden layer</label>
+        <div class="seg wide" id="bp_widthseg" style="margin-top:3px">
+          <button data-w="2">2</button>
+          <button data-w="3">3</button>
+          <button data-w="4">4</button>
+        </div>
+      </div>
+
+      <div class="divider"></div>
       <h2>Data</h2>
       <div class="stack-btns" id="bp_setseg"></div>
       <div class="hint" id="bp_setnote" style="margin-top:6px"></div>
 
       <div class="divider"></div>
-      <h2>Parameters</h2>
+      <h2 id="bp_paramhead">Parameters</h2>
       <div id="bp_wctrls"></div>
-      <button id="bp_rand" style="width:100%">↺ re-initialise w, b</button>
-      <div class="hint" style="margin-top:5px">Uniform on ±1/√fan_in — what <code>nn.Linear</code> does.</div>
+      <button id="bp_rand" style="width:100%">↺ re-initialise</button>
+      <div class="hint" style="margin-top:5px">Uniform on ±1/√fan_in, per layer — what
+        <code>nn.Linear</code> does.</div>
 
       <div class="divider"></div>
       <h2>Activation</h2>
@@ -356,6 +371,13 @@
         <button id="bp_prev" title="previous step">&#9664;</button>
         <button id="bp_next" title="next step">&#9654;</button>
         <button id="bp_play">&#9654; play</button>
+        <div class="seg" id="bp_spdseg" title="how fast play runs">
+          <button data-spd="1">1&times;</button>
+          <button data-spd="2">2&times;</button>
+          <button data-spd="10">10&times;</button>
+          <button data-spd="50">50&times;</button>
+        </div>
+        <span class="mono" id="bp_stepeq" style="color:var(--dim);font-size:11.5px"></span>
         <span class="hint" id="bp_stephint" style="margin:0"></span>
       </div>
 
@@ -376,7 +398,7 @@
         <button id="bp_sprev" title="previous point">&#9664;</button>
         <span id="bp_slabel" class="mono" style="flex:1;text-align:center"></span>
         <button id="bp_snext" title="next point">&#9654;</button>
-        <label class="chk"><input type="checkbox" id="bp_trails"> tail</label>
+        <label class="chk" id="bp_ctrl_trails"><input type="checkbox" id="bp_trails"> tail</label>
       </div>
       <div class="hint" style="margin-top:6px">Hover a point and the diagram fills with it.</div>
       <div class="note" id="bp_fitnote"></div>
