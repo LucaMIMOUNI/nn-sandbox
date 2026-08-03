@@ -327,7 +327,15 @@
       <div class="divider"></div>
       <h2>Data</h2>
       <div class="stack-btns" id="bp_setseg"></div>
-      <div class="hint" id="bp_setnote" style="margin-top:6px"></div>
+      <div id="bp_splitwrap" style="margin-top:9px">
+        <label class="chk"><input type="checkbox" id="bp_holdout"> validation split</label>
+        <div class="hint" style="margin-top:2px">Holds a third of the points out of the update — never
+          trained on. The hollow points on the plot, and the blue curve on the loss.</div>
+        <label class="chk" style="margin-top:7px"><input type="checkbox" id="bp_noisy"> noisy labels</label>
+        <div class="hint" style="margin-top:2px">Flips one training label in five. The fastest way to watch
+          a model spend its capacity on memorising.</div>
+      </div>
+      <div class="hint" id="bp_setnote" style="margin-top:8px"></div>
 
       <div class="divider"></div>
       <h2 id="bp_paramhead">Parameters</h2>

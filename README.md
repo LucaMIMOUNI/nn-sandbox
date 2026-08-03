@@ -10,7 +10,7 @@ slider, hover a number, and the page works out that number in front of you.
 | **Conv2d** | `kernel_size`, `stride`, `padding`, `dilation` |
 | **ConvTranspose2d** | the same, plus `output_padding` |
 | **Normalisation** | BatchNorm, LayerNorm, InstanceNorm, GroupNorm, and the covariate shift they answer |
-| **Backprop** | a neuron fitting itself to points, then the same neuron many times over as an MLP |
+| **Backprop** | a neuron fitting itself to points, then the same neuron many times over as an MLP — with a validation split, so overfitting shows up as two curves coming apart |
 
 Feed it random integers you can check by hand, an MNIST digit, or your own photo.
 Presets load the parameters of real networks — LeNet, AlexNet, VGG, ResNet,
@@ -45,7 +45,8 @@ python3 verify/conv2d.py            # both convolution tabs, 1086 combinations
 python3 verify/convtranspose2d.py
 python3 verify/batchnorm.py
 python3 verify/backprop.py          # the autograd engine, 1331 configurations
-python3 verify/mlp.py               # the same engine over layers, and the delta recursion
+python3 verify/mlp.py               # the same engine over layers, the delta recursion,
+                                    # and where the validation loss turns back up
 ```
 
 `verify/conv2d.py` also checks that hovering an input and hovering an output agree

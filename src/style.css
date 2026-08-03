@@ -227,6 +227,7 @@
   .flag.ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
   .flag.bad{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad)}
   .err{color:var(--bad);font-weight:600}
+  .errt{color:var(--bad)}
   table.stats{width:100%;border-collapse:collapse;font-family:ui-monospace,Menlo,monospace;font-size:11px}
   table.stats th{color:var(--dim2);font-weight:600;text-align:right;padding:2px 4px;font-size:10px;
                  letter-spacing:.03em;white-space:nowrap}

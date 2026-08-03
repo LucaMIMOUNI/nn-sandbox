@@ -239,6 +239,20 @@ def make_plane():
 SETS = {"xor": make_xor(), "circle": make_circle(), "plane": make_plane()}
 
 
+def make_split(points, holdout=True, noisy=False):
+    """The page's validation split, index for index: every third point is held
+    out of the update, and with noisy labels on, one training label in five is
+    flipped. Both are done over the full array, so the indices line up with the
+    page's."""
+    tr, va = [], []
+    for i, (xs, t) in enumerate(points):
+        val = holdout and i % 3 == 0
+        if not val and noisy and i % 5 == 0:
+            t = 1.0 - t
+        (va if val else tr).append((xs, t))
+    return tr, va
+
+
 # ----------------------------------------------------------------------
 # the checks
 # ----------------------------------------------------------------------
@@ -443,24 +457,56 @@ def main():
         print("torch not installed — the autograd comparison was skipped "
               "(pip install torch to run it).")
 
+    def train(name, hidden, width, eta, steps, noisy=False, holdout=True, act="tanh"):
+        """Exactly what the page does when you hold ▶ down: train on the kept
+        points, watch the loss on the validation ones, and remember where that
+        second number bottomed out."""
+        sh = [2] + [width] * hidden + [1]
+        Ws, Bs = seeded(sh, width, hidden)
+        tr, va = make_split(SETS[name], holdout, noisy)
+        first = batch_loss_at(tr, Ws, Bs, act)
+        best, best_at, hist = 1e30, 0, []
+        for k in range(steps):
+            Lv = batch_loss_at(va, Ws, Bs, act) if va else float("nan")
+            if va and Lv < best:
+                best, best_at = Lv, k
+            _, GW, GB = batch(tr, Ws, Bs, act)
+            Ws = [[[Ws[l][j][i] - eta * GW[l][j][i] for i in range(len(Ws[l][j]))]
+                   for j in range(len(Ws[l]))] for l in range(len(Ws))]
+            Bs = [[Bs[l][j] - eta * GB[l][j] for j in range(len(Bs[l]))] for l in range(len(Bs))]
+        last = batch_loss_at(tr, Ws, Bs, act)
+        lastv = batch_loss_at(va, Ws, Bs, act) if va else float("nan")
+        assert last < first, (name, first, last)
+        return sh, tr, va, first, last, best, best_at, lastv, Ws, Bs
+
     # the page's own defaults, trained the way its "train x200" button does
     print("\nEach dataset, 200 updates from the init the page opens with:")
     for name, hidden, width, eta in [("xor", 1, 4, 0.6), ("circle", 1, 4, 0.6),
                                      ("xor", 2, 4, 0.6), ("plane", 1, 4, 1.0)]:
-        sh = [2] + [width] * hidden + [1]
-        Ws, Bs = seeded(sh, width, hidden)
+        sh, tr, va, first, last, *_ , Ws, Bs = train(name, hidden, width, eta, 200,
+                                                    holdout=False)
         pts = SETS[name]
-        first = batch_loss_at(pts, Ws, Bs, "tanh")
-        for _ in range(200):
-            _, GW, GB = batch(pts, Ws, Bs, "tanh")
-            Ws = [[[Ws[l][j][i] - eta * GW[l][j][i] for i in range(len(Ws[l][j]))]
-                   for j in range(len(Ws[l]))] for l in range(len(Ws))]
-            Bs = [[Bs[l][j] - eta * GB[l][j] for j in range(len(Bs[l]))] for l in range(len(Bs))]
-        last = batch_loss_at(pts, Ws, Bs, "tanh")
         wrong = sum(1 for xs, t in pts if (net_raw(xs, Ws, Bs, "tanh") >= 0.5) != (t >= 0.5))
-        assert last < first, (name, first, last)
         print(f"  {name:<7} {'→'.join(str(n) for n in sh):<10} eta {eta:<4} "
               f"L {first:.4f} -> {last:.4f}   {len(pts) - wrong}/{len(pts)} points on the right side")
+
+    # and the thing the loss plot flags: the validation loss turning back up while
+    # the training loss keeps falling. The page draws exactly these two curves.
+    print("\nWith a validation split — where the validation loss bottoms out:")
+    for name, hidden, width, noisy, steps in [("circle", 1, 4, False, 1250),
+                                              ("circle", 1, 4, True,  1250),
+                                              ("circle", 2, 4, False, 3200),
+                                              ("xor",    1, 4, True,  1250)]:
+        sh, tr, va, first, last, best, best_at, lastv, *_ = train(
+            name, hidden, width, 0.6, steps, noisy=noisy)
+        over = lastv > best * 1.15
+        print(f"  {name:<7} {'→'.join(str(n) for n in sh):<10} "
+              f"{'noisy' if noisy else 'clean':<6} {len(tr)}/{len(va)} split, {steps} updates: "
+              f"train {last:.4f}, val {lastv:.4f}, best {best:.4f} at {best_at}"
+              f"{'   OVERFITTING' if over else ''}")
+        # the clean, one-layer run must not be flagged, and the noisy one must
+        if name == "circle" and hidden == 1:
+            assert over == noisy, (name, noisy, best, lastv)
 
     # the claim the xor button makes: one neuron cannot do this, a hidden layer can
     one_W, one_B = [[[0.3, -0.4]]], [[0.0]]
