@@ -11,6 +11,7 @@ const S = {
   epsExp:-5, aff:"init", mode:"train", mom:0.1,
   dead:false,
   batch:1,                       // which sample of the data distribution we are showing
+  cs:0,                          // training step shown in the covariate-shift panel
   steps:0,                       // training batches fed so far
   focus:null,                    // {t,n,c,h,w}
   calc:{N:null, C:null, H:null, W:null},
@@ -349,6 +350,142 @@ function paint(){
   renderStepFormula();
   paintFocus(P);
   paintDist(P);
+  paintCS(P);
+}
+
+/* ================= covariate shift — the moving target =================
+   The problem BatchNorm was introduced to solve. Training changes the weights
+   of every layer at once, so the distribution a layer *receives* keeps moving
+   underneath it: it spends its updates chasing that instead of learning. The
+   original paper called this internal covariate shift.
+
+   Two things make it expensive, and both are on screen. The distribution
+   drifts off the range where the next non-linearity has any gradient left, and
+   it keeps moving, so nothing the layer learned about the old range still
+   holds. Normalising pins both: whatever arrives, what leaves is (β, γ).
+
+   (Honesty: later work — Santurkar et al., 2018 — showed BatchNorm helps even
+   when shift is injected deliberately, and credits a smoother loss surface.
+   The pinning below is real either way; the causal story is not settled.)
+   ====================================================================== */
+const CS_T = 16;              // training steps drawn
+const CS_BAND = 2.5;          // |z| where a sigmoid still keeps ~28% of its best gradient
+const CS_ROW = 13, CS_HEAD = 30, CS_FOOT = 24, CS_GUT = 54, CS_GAP = 26;
+
+// Abramowitz & Stegun 7.1.26 — good to 1.5e-7, plenty for a percentage
+function erf(x){
+  const s = x < 0 ? -1 : 1;
+  x = Math.abs(x);
+  const t = 1/(1 + 0.3275911*x);
+  const y = 1 - ((((1.061405429*t - 1.453152027)*t + 1.421413741)*t
+                  - 0.284496736)*t + 0.254829592)*t*Math.exp(-x*x);
+  return s*y;
+}
+const ncdf   = (v, m, sd) => 0.5*(1 + erf((v - m)/(sd*Math.SQRT2)));
+const inBand = (m, sd) => ncdf(CS_BAND, m, sd) - ncdf(-CS_BAND, m, sd);
+
+// what one channel hands the next layer at training step t. Not a model of a
+// real network — a seeded walk with a slow push outward, which is what a
+// layer's input does while the weights below it are still moving.
+function drift(t){
+  const r = prng(424242);
+  let mu = 0.15, sd = 1;
+  for(let i=0;i<t;i++){
+    mu += 0.45*gauss(r) + 0.10;
+    sd  = Math.max(0.15, sd*(1 + 0.09*gauss(r) + 0.09));
+  }
+  return {mu, sd};
+}
+
+function paintCS(P){
+  const W = Math.max(660, (el("cswrap").clientWidth || 900) - 2);
+  const pw = Math.floor((W - CS_GUT - CS_GAP)/2);
+  const H = CS_HEAD + CS_T*CS_ROW + CS_FOOT;
+  const g = fitCanvas(el("cs"), W, H);
+  g.clearRect(0, 0, W, H);
+
+  const c = S.focus ? S.focus.c : 0;
+  const gam = S.aff === "off" ? 1 : GAM[c], bet = S.aff === "off" ? 0 : BET[c];
+  const after = {mu: bet, sd: Math.max(Math.abs(gam), 0.05)};
+
+  // one range for both panels — comparing them is the whole point
+  let R = CS_BAND + 0.6;
+  for(let t=0;t<CS_T;t++){
+    const d = drift(t);
+    R = Math.max(R, Math.abs(d.mu) + 2.6*d.sd);
+  }
+  R = Math.max(R, Math.abs(after.mu) + 2.6*after.sd);
+
+  const sides = [
+    {x0: CS_GUT, head: "without BatchNorm", rgb: P.pos, at: t => drift(t)},
+    {x0: CS_GUT + pw + CS_GAP, head: `with BatchNorm  (γ ${fmt(gam)}, β ${fmt(bet)})`,
+     rgb: P.vio, at: () => after},
+  ];
+
+  g.textAlign = "center"; g.textBaseline = "alphabetic";
+  for(const s of sides){
+    const px = v => s.x0 + pw/2 + (v/R)*(pw/2 - 6);
+
+    g.font = "600 10px ui-sans-serif,system-ui"; g.fillStyle = P.dim;
+    g.fillText(s.head, s.x0 + pw/2, 11);
+
+    // the band where a sigmoid still has a gradient worth passing back
+    g.fillStyle = `rgba(${P.neg[0]},${P.neg[1]},${P.neg[2]},.10)`;
+    g.fillRect(px(-CS_BAND), CS_HEAD - 8, px(CS_BAND) - px(-CS_BAND), CS_T*CS_ROW + 10);
+    g.font = "9px ui-sans-serif,system-ui"; g.fillStyle = P.dim2;
+    g.fillText("gradient still flows here", s.x0 + pw/2, CS_HEAD - 12);
+
+    for(let t=0;t<CS_T;t++){
+      const {mu, sd} = s.at(t), y = CS_HEAD + t*CS_ROW + CS_ROW/2;
+      const on = t === S.cs;
+      const a = on ? .85 : .26;
+      g.fillStyle = `rgba(${s.rgb[0]},${s.rgb[1]},${s.rgb[2]},${a})`;
+      const lo = px(mu - 2*sd), hi = px(mu + 2*sd);
+      roundRect(g, lo, y - 3.5, Math.max(2, hi - lo), 7, 3.5); g.fill();
+      g.fillStyle = `rgba(${s.rgb[0]},${s.rgb[1]},${s.rgb[2]},${on ? 1 : .5})`;
+      g.fillRect(px(mu) - .5, y - 6, 1, 12);                  // where the centre sits
+    }
+
+    g.strokeStyle = P.line; g.lineWidth = 1;                  // the axis, and zero
+    const ay = CS_HEAD + CS_T*CS_ROW + 5;
+    g.beginPath(); g.moveTo(s.x0, ay); g.lineTo(s.x0 + pw, ay); g.stroke();
+    g.strokeStyle = P.dim2;
+    g.beginPath(); g.moveTo(px(0), ay - 3); g.lineTo(px(0), ay + 3); g.stroke();
+    g.font = "9px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim2;
+    g.fillText("0", px(0), ay + 14);
+    g.fillText(`−${CS_BAND}`, px(-CS_BAND), ay + 14);
+    g.fillText(`+${CS_BAND}`, px(CS_BAND), ay + 14);
+  }
+
+  g.textAlign = "right"; g.font = "9.5px ui-monospace,Menlo,monospace";
+  for(let t=0;t<CS_T;t++){
+    const on = t === S.cs;
+    g.fillStyle = on ? P.text : P.dim2;
+    g.fillText(on ? `step ${t}` : String(t), CS_GUT - 8, CS_HEAD + t*CS_ROW + CS_ROW/2 + 3.5);
+  }
+  g.textAlign = "left";
+
+  const d = drift(S.cs), pb = inBand(d.mu, d.sd), pa = inBand(after.mu, after.sd);
+  el("csnote").innerHTML =
+    `Each row is one training step, and each bar is where <b>one channel's values</b> sit as they arrive
+     at the next layer — the bar spans μ ± 2σ, the tick is μ. Nothing below has been trained here; the
+     drift is a stand-in for what the layers underneath do to their output while <em>they</em> are being
+     trained.
+     <br><b style="color:var(--fg)">Left, the problem.</b> The bars walk off and widen. At step
+     <b>${S.cs}</b> this channel arrives at μ ${fmt(d.mu)}, σ ${fmt(d.sd)}, which leaves
+     <b class="${pb < 0.4 ? "err" : ""}">${fmt(100*pb, 1)}%</b> of its values in the shaded band — the
+     part of a sigmoid with a gradient worth passing back. It was ${fmt(100*inBand(0.15, 1), 1)}% at
+     step 0. The next layer is being asked to learn from a distribution that will not be there next
+     step, through a non-linearity that has gone flat.
+     <br><b style="color:var(--fg)">Right, the fix.</b> Every row is identical, because it has to be:
+     the output of the normalising step is <b>(β, γ)</b> = (${fmt(bet)}, ${fmt(gam)}) whatever came in,
+     so <b>${fmt(100*pa, 1)}%</b> stay in the band at <em>every</em> step. The layer above now sees the
+     same kind of input on step 15 as on step 0, which is what lets it use a larger learning rate and
+     stop re-adapting.
+     ${Math.abs(gam) > 2.2
+       ? `<br>γ = ${fmt(gam)} is wide enough to push values back out of the band by itself — the
+          protection is only as good as what training does with γ and β.`
+       : ""}`;
 }
 
 /* --------- the selected number, and only that one, on its way through ---------
@@ -370,20 +507,61 @@ const COL_W = 150, ARROW_W = 138, TILE_W = 92, TILE_H = 46;
 const TITLE_Y = 11, TILE_Y = 17, NOTE_Y = TILE_Y + TILE_H + 14;
 const BELL_TOP = 92, AXIS_Y = 154, STATS_Y = 172, FOCUS_H = 186;
 
-// the fitted normal for a set of values, drawn as a real density: squeeze the
-// spread and the curve gets taller, because the area under it is always 1
-function bell(g, m, sd, ax, aw, span, scale, fill, stroke){
+/* ---------- what the numbers actually do, and what a normal would say ----------
+   The solid curve is a kernel density estimate: every value gets a small normal
+   dropped on it and they are summed. So it is bell-like, but it follows the real
+   numbers — a shoulder where three of them cluster, a thinner tail on the side
+   with fewer. Twenty-seven samples of a genuine normal never make a clean bell,
+   and pretending otherwise is the thing this replaced.
+
+   The bandwidth is the dial between the two pictures: narrow and every value
+   shows as its own spike, wide and it converges to the analytic bell. 0.85 of
+   Silverman's rule keeps one clear peak while leaving the asymmetry visible.
+
+   Smoothing adds width — the estimate carries variance s² + h², so the solid
+   curve sits a little lower and wider than the dashed one even when the data is
+   perfectly normal. The asymmetry is the data; that much of the height gap is
+   the estimator, which is why the note points at the shape and not the peak.
+   ------------------------------------------------------------------------- */
+const DSTEP = 2;                                  // pixels between density samples
+function kde(vals, sd, aw, ctr, hw){
+  const half = aw/2 - 4, n = vals.length;
+  const h = Math.max(0.85*sd*Math.pow(n, -0.2), hw/12);
+  const out = [];
+  for(let x=0; x<=aw; x+=DSTEP){
+    const v = ctr + (x - aw/2)/half*hw;
+    let d = 0;
+    for(let i=0;i<n;i++) d += Math.exp(-0.5*((v - vals[i])/h)**2);
+    out.push(d/(n*h*Math.sqrt(2*Math.PI)));
+  }
+  return out;
+}
+// drawn as a real density, so squeezing the spread makes the curve taller: the
+// area under it is always 1
+function curve(g, dens, ax, scale, fill, stroke){
+  const maxH = AXIS_Y - BELL_TOP;
+  g.beginPath();
+  for(let i=0;i<dens.length;i++){
+    const x = ax + i*DSTEP, y = AXIS_Y - Math.min(maxH, dens[i]*scale);
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  g.strokeStyle = stroke; g.lineWidth = 1.4; g.stroke();
+  g.lineTo(ax + (dens.length - 1)*DSTEP, AXIS_Y); g.lineTo(ax, AXIS_Y); g.closePath();
+  g.fillStyle = fill; g.fill();
+}
+// the normal with the same μ and σ — the summary the layer actually works from,
+// dashed behind the data it is a summary of
+function bell(g, m, sd, ax, aw, ctr, hw, scale, stroke){
   const half = aw/2 - 4, cx = ax + aw/2, maxH = AXIS_Y - BELL_TOP;
   g.beginPath();
   for(let x=ax, first=true; x<=ax+aw; x+=2, first=false){
-    const v = (x - cx)/half*span;
+    const v = ctr + (x - cx)/half*hw;
     const d = Math.exp(-0.5*((v-m)/sd)**2) / (sd*Math.sqrt(2*Math.PI));
     const y = AXIS_Y - Math.min(maxH, d*scale);
     first ? g.moveTo(x, y) : g.lineTo(x, y);
   }
-  g.strokeStyle = stroke; g.lineWidth = 1.4; g.stroke();
-  g.lineTo(ax+aw, AXIS_Y); g.lineTo(ax, AXIS_Y); g.closePath();
-  g.fillStyle = fill; g.fill();
+  g.setLineDash([3,3]); g.strokeStyle = stroke; g.lineWidth = 1; g.stroke();
+  g.setLineDash([]);
 }
 
 function paintFocus(P){
@@ -412,16 +590,39 @@ function paintFocus(P){
   ];
   const st = stages.map(s => Object.assign(s, groupStats(s.T, grp)));
 
-  // one vertical scale for all three bells, set by the tallest peak
+  // Each axis is centred on its own μ, and all three cover the same number of
+  // values per pixel. That is what makes the squeeze visible: same units either
+  // side, so a smaller σ is a narrower curve, and taller, since the area is 1.
+  //
+  // Centring every axis on zero instead would shove the raw curve into a corner
+  // whenever μ is far from zero, while x̂ sat comfortably in the middle. The
+  // shift is shown by where the zero mark lands, which is the honest place.
   const aw = COL_W - 16;
-  const floor = span/160;                                   // keeps a spike of 0 width drawable
+  let reach = 0;
+  for(const s of st){
+    s.vals = [];
+    for(const m of grp.members) for(let hh=0;hh<S.H;hh++) for(let ww=0;ww<S.Wd;ww++)
+      s.vals.push(s.T[idx(m.n,m.c,hh,ww)]);
+    for(const v of s.vals) reach = Math.max(reach, Math.abs(v - s.mean));
+  }
+  // sized from the furthest value any stage reaches, so nothing is ever drawn
+  // off the end of its axis
+  const HW = Math.max(1.12*reach, span/40);                 // values either side of μ
+  const floor = HW/60;                                      // keeps a spike of 0 width drawable
+
+  // one vertical scale for all three columns, tall enough for whichever of the
+  // six curves peaks highest — so nothing is silently flattened against the top
   let peak = 0;
-  for(const s of st) peak = Math.max(peak, 1/(Math.max(s.sd, floor)*Math.sqrt(2*Math.PI)));
+  for(const s of st){
+    s.dens = kde(s.vals, Math.max(s.sd, floor), aw, s.mean, HW);
+    for(const d of s.dens) peak = Math.max(peak, d);
+    peak = Math.max(peak, 1/(Math.max(s.sd, floor)*Math.sqrt(2*Math.PI)));
+  }
   const scale = (AXIS_Y - BELL_TOP) / (peak || 1);
 
   st.forEach((s, k) => {
     const x0 = k*(COL_W + ARROW_W), mid = x0 + COL_W/2;
-    const ax = mid - aw/2, px = v => ax + aw/2 + (v/span)*(aw/2 - 4);
+    const ax = mid - aw/2, px = v => ax + aw/2 + ((v - s.mean)/HW)*(aw/2 - 4);
     const last = k === 2;
 
     g.textAlign = "center"; g.textBaseline = "alphabetic";
@@ -443,15 +644,28 @@ function paintFocus(P){
     g.textBaseline = "alphabetic";
     g.fillText(s.note, mid, NOTE_Y);
 
-    // the fitted normal, then the actual values on the axis beneath it
+    // what the values do, the normal that summarises them, then the values
+    // themselves on the axis beneath
     const rgb = k === 0 ? P.pos : k === 1 ? P.neg : P.vio;
-    bell(g, s.mean, Math.max(s.sd, floor), ax, aw, span, scale,
-         `rgba(${rgb[0]},${rgb[1]},${rgb[2]},.16)`, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},.85)`);
+    curve(g, s.dens, ax, scale,
+          `rgba(${rgb[0]},${rgb[1]},${rgb[2]},.16)`, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},.85)`);
+    bell(g, s.mean, Math.max(s.sd, floor), ax, aw, s.mean, HW, scale, P.dim2);
 
     g.strokeStyle = P.line; g.lineWidth = 1;
     g.beginPath(); g.moveTo(ax, AXIS_Y); g.lineTo(ax + aw, AXIS_Y); g.stroke();
-    g.strokeStyle = P.dim2;                                 // zero
-    g.beginPath(); g.moveTo(px(0), AXIS_Y - 4); g.lineTo(px(0), AXIS_Y + 4); g.stroke();
+
+    // where zero falls. On the raw axis it is usually off the end — which is
+    // precisely the distance − μ is about to close. On x̂ it lands dead centre.
+    g.strokeStyle = P.dim2; g.fillStyle = P.dim2;
+    const z = px(0);
+    if(z >= ax && z <= ax + aw){
+      g.beginPath(); g.moveTo(z, AXIS_Y - 4); g.lineTo(z, AXIS_Y + 4); g.stroke();
+    } else {
+      const dir = z < ax ? -1 : 1, edge = dir < 0 ? ax + 1 : ax + aw - 1;
+      g.beginPath();
+      g.moveTo(edge + dir*5, AXIS_Y); g.lineTo(edge - dir*2, AXIS_Y - 4);
+      g.lineTo(edge - dir*2, AXIS_Y + 4); g.closePath(); g.fill();
+    }
     g.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},.65)`;
     for(const m of grp.members) for(let hh=0;hh<S.H;hh++) for(let ww=0;ww<S.Wd;ww++){
       g.beginPath(); g.arc(px(s.T[idx(m.n,m.c,hh,ww)]), AXIS_Y + 4, 1.9, 0, 6.2832); g.fill();
@@ -486,17 +700,34 @@ function paintFocus(P){
   });
 
   el("focusnote").innerHTML =
-    `The curve is the normal fitted to <b>every number pooled into the same μ</b>, the dots are those
-     numbers, and the triangle is the one you are pointing at. All three share one horizontal scale, so
-     the middle curve is narrower <em>and</em> taller — squeezing the spread to 1 has to push the peak up,
-     the area under a density is always 1.
+    `<b style="color:var(--fg)">Reading it.</b> The solid curve is the shape
+     <b>every number pooled into the same μ</b> actually makes — each value contributes a small bump and
+     they are added up, so it comes out bell-<em>like</em> but lopsided, with a real shoulder and tail.
+     The dashed line is the perfect normal with that same μ and σ: the <em>summary</em> the layer works
+     from. Twenty-seven values never make a clean bell — one side runs out further, the peak sits off to
+     one side — and everything μ and σ know about that is nothing.
+     The dots are those values and the triangle is the one you are pointing at.
+     The axes are centred on their own μ but cover the same
+     <b>values per pixel</b>, so the middle curve being narrower <em>and</em> taller is real and not a
+     change of zoom — squeezing the spread to 1 has to push the peak up, since the area under a density
+     is always 1. The small mark on each axis is <b>zero</b>: off the end on the raw axis, which is the
+     distance − μ closes, and dead centre once it has.
+     <br><b style="color:var(--fg)">Why − μ and ÷ σ.</b> They put every channel on the same footing.
+     Whatever this one happened to be doing — sitting at ${fmt(st[0].mean)}, ${fmt(st[0].sd)} wide — comes
+     out at 0 and 1, like all the others, and stays there however the layers below it change. The next
+     layer then gets an input it can count on instead of a moving one.
      ${identity
-       ? `<br><b>γ = 1, β = 0 right now, so the third curve is the second one exactly.</b> That is what
-          <em>at init</em> means: the affine step is the identity until training moves it. Drag γ or β,
-          or press <em>trained</em>, to separate them.`
-       : `<br>The third curve is the second one <b>stretched by γ = ${fmt(GAM[c])}</b> and
-          <b>shifted by β = ${fmt(BET[c])}</b> — that is the entire affine step, and the only part of this
-          layer with learnable parameters.`}`;
+       ? `<br><b style="color:var(--fg)">Why γ and β.</b> Forcing 0 and 1 is a restriction: some channels
+          want to be wider, or off-centre, and a sigmoid handed only 0-and-1 inputs never leaves its
+          straight middle. γ and β buy the freedom back — <b>and only they are learned</b>, so the network
+          chooses the spread and centre while the normalising keeps them steady.
+          <b>Right now γ = 1 and β = 0, the identity</b>, so the third curve is the second one exactly.
+          That is what <em>at init</em> means. Drag γ or β, or press <em>trained</em>, to separate them.`
+       : `<br><b style="color:var(--fg)">Why γ and β.</b> Forcing 0 and 1 is a restriction: some channels
+          want to be wider, or off-centre, and a sigmoid handed only 0-and-1 inputs never leaves its
+          straight middle. γ and β buy the freedom back — <b>and only they are learned</b>, so the network
+          chooses the spread and centre while the normalising keeps them steady. Here it has stretched
+          the curve by <b>γ = ${fmt(GAM[c])}</b> and shifted it by <b>β = ${fmt(BET[c])}</b>.`}`;
 }
 
 /* ---------- the operation itself, spelled out once, always on screen ---------- */
@@ -563,7 +794,8 @@ function paintDist(P){
 
   el("distnote").innerHTML =
     `Each dot is one number of the tensor, one row per pooling group. Left: the raw values — the
-     groups sit at different centres with different spreads. Right: the same numbers after the layer.
+     groups sit at different centres with different spreads. Right: the same numbers after the layer,
+     every row lined up on one centre and one spread — which is the point.
      ${GRP.length > DROWS ? `<br>Showing the first ${DROWS} of ${GRP.length} groups.` : ""}`;
 }
 
@@ -768,6 +1000,10 @@ function buildControls(){
   seg("modeseg", "mode", v => { S.mode = v; refresh(); });
   seg("momseg",  "mom",  v => { S.mom = +v; refresh(); });
 
+  el("csprev").addEventListener("click", () => { csStop(); csGo(S.cs - 1); });
+  el("csnext").addEventListener("click", () => { csStop(); csGo(S.cs + 1); });
+  el("csplay").addEventListener("click", csPlay);
+
   el("feed").addEventListener("click", feedBatch);
   el("reset").addEventListener("click", () => { resetRunning(); refresh(); });
   el("dead").addEventListener("change", e => { S.dead = e.target.checked; refresh(true); });
@@ -832,7 +1068,7 @@ function syncControls(){
               The difference is that they are now parameters with gradients. Press <em>trained</em>, or
               drag them below, to see where training takes them.`,
     learned: `Where γ and β tend to land after training — each channel gets its own pair.`,
-    custom:  `Your own γ, β for this channel. Watch the third bell stretch by γ and slide by β.`,
+    custom:  `Your own γ, β for this channel. Watch the third curve stretch by γ and slide by β.`,
   })[S.aff];
 
   const affOff = S.aff === "off";
@@ -859,10 +1095,35 @@ function syncControls(){
        point, inference must not depend on whatever else is in the batch.`;
   el("dead").checked = S.dead;
 
+  el("cslabel").textContent = `step ${S.cs} of ${CS_T - 1}`;
+  el("csprev").disabled = S.cs === 0;
+  el("csnext").disabled = S.cs === CS_T - 1;
+  el("csplay").textContent = csTimer ? "❚❚ pause" : "▶ train";
+
   const c = S.calc;
   el("dN").value = calc("N"); el("dC").value = calc("C");
   el("dH").value = calc("H"); el("dW").value = calc("W");
   el("dsync").style.display = calcLinked() ? "none" : "";
+}
+
+/* ---------- walking the training steps ---------- */
+let csTimer = 0;
+function csGo(t){
+  S.cs = Math.max(0, Math.min(CS_T - 1, t));
+  paint(); syncControls();
+}
+function csStop(){
+  clearInterval(csTimer); csTimer = 0;
+  if(started) syncControls();               // the tab bar can stop this before wire() ever ran
+}
+function csPlay(){
+  if(csTimer) return csStop();
+  if(S.cs >= CS_T - 1) S.cs = 0;
+  csTimer = setInterval(() => {
+    if(S.cs >= CS_T - 1) return csStop();
+    csGo(S.cs + 1);
+  }, 420);
+  syncControls();
 }
 
 /* ============================== interaction ============================== */
@@ -925,6 +1186,7 @@ return {
   show(){
     if(!started){ started = true; buildControls(); wire(); refresh(true); }
     else refresh();
-  }
+  },
+  hide(){ csStop(); }
 };
 })();

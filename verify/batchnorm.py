@@ -19,9 +19,14 @@ using the *unbiased* variance for the buffer while normalising with the
 *biased* one. This script implements all of that in plain Python and checks it
 against PyTorch if torch happens to be installed.
 
+It also checks the covariate-shift panel: that a channel's distribution drifts
+off the range where a sigmoid still has a gradient while the layers below it
+train, and that normalising pins it there instead.
+
     python3 verify_batchnorm.py
 """
 
+import math
 from itertools import product
 
 try:
@@ -120,6 +125,81 @@ def sample(N, C, H, W, seed=0):
 
 def flat(y):
     return [v for a in y for b in a for c in b for v in c]
+
+
+# ------------------------------------------------------- covariate shift
+# The page's bottom panel claims a channel's distribution drifts while the
+# layers below it train, that this walks its values out of the range where a
+# sigmoid still has a gradient, and that normalising pins them there instead.
+# Ported from src/norm.js -- same LCG, same Box-Muller, same call order.
+def js_prng(seed):
+    x = [seed & 0xFFFFFFFF]
+
+    def nxt():
+        x[0] = (x[0] * 1664525 + 1013904223) & 0xFFFFFFFF
+        return x[0] / 4294967296
+    return nxt
+
+
+def js_gauss(r):
+    u = max(r(), 1e-9)
+    return math.sqrt(-2 * math.log(u)) * math.cos(2 * math.pi * r())
+
+
+def js_erf(x):
+    """Abramowitz & Stegun 7.1.26, exactly as the page implements it."""
+    s = -1 if x < 0 else 1
+    x = abs(x)
+    t = 1 / (1 + 0.3275911 * x)
+    y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t
+              - 0.284496736) * t + 0.254829592) * t * math.exp(-x * x)
+    return s * y
+
+
+CS_T, CS_BAND = 16, 2.5
+
+
+def drift(t):
+    r = js_prng(424242)
+    mu, sd = 0.15, 1.0
+    for _ in range(t):
+        mu += 0.45 * js_gauss(r) + 0.10
+        sd = max(0.15, sd * (1 + 0.09 * js_gauss(r) + 0.09))
+    return mu, sd
+
+
+def in_band(mu, sd, erf=js_erf):
+    cdf = lambda v: 0.5 * (1 + erf((v - mu) / (sd * math.sqrt(2))))
+    return cdf(CS_BAND) - cdf(-CS_BAND)
+
+
+def check_covariate_shift():
+    """Three claims the covariate-shift panel makes.
+
+    1. The erf approximation the page uses is accurate enough to print as a
+       percentage -- checked against math.erf.
+    2. in_band really is the fraction of a normal inside [-2.5, 2.5], checked
+       against a direct numerical integration of the density.
+    3. The drift walks a channel out of that band, while normalising holds it.
+    """
+    worst = max(abs(js_erf(x / 10) - math.erf(x / 10)) for x in range(-60, 61))
+    assert worst < 1.5e-7, worst
+
+    for mu, sd in ((0.0, 1.0), (3.0, 2.0), (-1.5, 0.4), (6.0, 1.2)):
+        # midpoint rule over the band itself, so the edges land on the grid
+        n = 200000
+        step = 2 * CS_BAND / n
+        ref = sum(math.exp(-0.5 * ((-CS_BAND + (i + 0.5) * step - mu) / sd) ** 2)
+                  for i in range(n)) * step / (sd * math.sqrt(2 * math.pi))
+        assert abs(in_band(mu, sd) - ref) < 1e-6, (mu, sd, in_band(mu, sd), ref)
+
+    rows = [(t,) + drift(t) + (in_band(*drift(t)),) for t in range(CS_T)]
+    assert rows[0][3] > 0.98, rows[0]           # starts healthy
+    assert rows[-1][3] < 0.10, rows[-1]         # ends saturated
+    assert abs(rows[-1][1]) > 4, rows[-1]       # because it drifted
+    assert rows[-1][2] > 2 * rows[0][2], rows[-1]   # and widened
+    assert abs(in_band(0.0, 1.0) - 0.9876) < 1e-3   # what BatchNorm pins it to
+    return rows
 
 
 def main():
@@ -261,6 +341,16 @@ def main():
         print(f"torch not installed — {skipped} value comparisons skipped "
               f"(pip install torch to run them).")
         print(f"running_mean after 4 batches: {[round(v, 3) for v in rm]}")
+
+    rows = check_covariate_shift()
+    print("\nCovariate shift: what one channel hands the next layer, while the layers")
+    print("below it are still training. The band is |z| <= 2.5, where a sigmoid still")
+    print("keeps ~28% of its best gradient.")
+    print(f"  {'step':>4} {'mu':>7} {'sigma':>7} {'in band':>9}   with BatchNorm")
+    for t_, mu, sd, p_ in rows:
+        if t_ % 3 == 0 or t_ == CS_T - 1:
+            print(f"  {t_:>4} {mu:>7.2f} {sd:>7.2f} {100 * p_:>8.1f}%   "
+                  f"{100 * in_band(0.0, 1.0):>6.1f}%  (mu 0.00, sigma 1.00, every step)")
 
     print("\nHow many values each statistic is estimated from, for a (32, 64, 56, 56) tensor:")
     N, C, H, W = 32, 64, 56, 56

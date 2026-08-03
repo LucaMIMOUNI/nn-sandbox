@@ -45,6 +45,8 @@ page = f"""<!doctype html>
 
 {part("norm.js")}
 
+{part("backprop.js")}
+
 {part("tabs.js")}
 </script>
 </body>

@@ -9,7 +9,8 @@ slider, hover a number, and the page works out that number in front of you.
 | --- | --- |
 | **Conv2d** | `kernel_size`, `stride`, `padding`, `dilation` |
 | **ConvTranspose2d** | the same, plus `output_padding` |
-| **Normalisation** | BatchNorm, LayerNorm, InstanceNorm, GroupNorm |
+| **Normalisation** | BatchNorm, LayerNorm, InstanceNorm, GroupNorm, and the covariate shift they answer |
+| **Backprop** | a neuron fitting itself to points, with the backward pass drawn under the forward one |
 
 Feed it random integers you can check by hand, an MNIST digit, or your own photo.
 Presets load the parameters of real networks — LeNet, AlexNet, VGG, ResNet,
@@ -28,6 +29,7 @@ src/style.css    src/page.html     the look and the markup
 src/assets.js    the bundled MNIST + photo, base64
 src/conv.js      Conv2d / ConvTranspose2d
 src/norm.js      the normalisation layers
+src/backprop.js  the autograd engine and the chain rule
 src/tabs.js      the menu
 
 python3 build.py
@@ -42,6 +44,7 @@ installed.
 python3 verify/conv2d.py            # both convolution tabs, 1086 combinations
 python3 verify/convtranspose2d.py
 python3 verify/batchnorm.py
+python3 verify/backprop.py          # the autograd engine, 1331 configurations
 ```
 
 `verify/conv2d.py` also checks that hovering an input and hovering an output agree

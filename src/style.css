@@ -2,12 +2,15 @@
     --bg:#0e1116; --panel:#161b22; --panel2:#1c222b; --line:#2a323d;
     --fg:#e6edf3; --dim:#8b949e; --dim2:#6e7681;
     --accent:#4aa3ff; --accent2:#f0a132; --ok:#3fb950; --bad:#f85149;
+    --violet:#d2a8ff;
   }
   @media (prefers-color-scheme: light){
     :root{
       --bg:#f6f8fa; --panel:#ffffff; --panel2:#f0f3f6; --line:#d6dde5;
       --fg:#1c2128; --dim:#57606a; --dim2:#8c959f;
       --accent:#0969da; --accent2:#bc6c00;
+      /* the violet the canvas uses for gradients — the dark tint is unreadable on white */
+      --violet:#8250df;
     }
   }
   *{box-sizing:border-box}
@@ -56,9 +59,9 @@
   .ctrl label b{color:var(--fg);font:600 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace}
   .ctrl input[type=range]{width:100%;accent-color:var(--accent);margin:0;display:block}
   .hint{font-size:11px;color:var(--dim2);margin-top:1px;line-height:1.4}
-  .k{color:var(--accent)} .s{color:var(--accent2)} .p{color:#d2a8ff}
+  .k{color:var(--accent)} .s{color:var(--accent2)} .p{color:var(--violet)}
   .op{color:#7ee787} .d{color:#ff9bc8}
-  .N{color:var(--accent2)} .C{color:var(--accent)} .HW{color:#d2a8ff}
+  .N{color:var(--accent2)} .C{color:var(--accent)} .HW{color:var(--violet)}
 
   button,.btn{
     background:var(--panel2);color:var(--fg);border:1px solid var(--line);
@@ -87,30 +90,47 @@
   /* ---------- centre ---------- */
   .modebar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
   .subbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--dim);min-height:30px}
-  #vizwrap,#bn_vizwrap,#bn_distwrap,#bn_focuswrap{overflow-x:auto}
+  #vizwrap,#bn_vizwrap,#bn_distwrap,#bn_focuswrap,#bn_cswrap,#bp_vizwrap,#bp_fitwrap{overflow-x:auto}
   #vizwrap{margin-top:6px}
   #bn_distwrap{margin-top:4px}
   #viz,#bn_viz{display:block;cursor:crosshair}
-  #bn_dist,#bn_focus{display:block}
+  #bn_dist,#bn_focus,#bn_cs,#bp_fit,#bp_viz{display:block}
   #bn_focuswrap{margin:2px 0 4px}
   .legend b{font-family:ui-monospace,Menlo,monospace}
   .stepbar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:9px;
            border-top:1px solid var(--line);font-size:12px}
   .stepbar button{padding:4px 9px}
-  #sellabel{min-width:118px;text-align:center;color:var(--fg);font-weight:600}
-  #readout,#bn_readout{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:var(--dim);
+  #sellabel,#bn_cslabel{min-width:118px;text-align:center;color:var(--fg);font-weight:600}
+  /* the five steps of one pass, as a rail across the top of the diagram */
+  .rail{display:flex;margin:0 0 10px}
+  .rail button{flex:1 1 0;min-width:0;border-radius:0;border-left-width:0;text-align:left;
+               padding:5px 8px;line-height:1.3}
+  .rail button:first-child{border-left-width:1px;border-radius:6px 0 0 6px}
+  .rail button:last-child{border-radius:0 6px 6px 0}
+  .rail button b{display:block;font-size:11px;font-weight:600}
+  .rail button i{display:block;font-style:normal;font-size:9.5px;color:var(--dim2);margin-top:1px;
+                 font-family:ui-monospace,Menlo,monospace;white-space:nowrap;overflow:hidden;
+                 text-overflow:ellipsis}
+  .rail button.done{color:var(--dim)}
+  .rail button.on{background:color-mix(in srgb,var(--accent) 16%,transparent);
+                  border-color:var(--accent);color:var(--accent)}
+  .rail button.on i{color:var(--accent);opacity:.75}
+  #readout,#bn_readout,#bp_readout{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:var(--dim);
            min-height:34px;margin-top:10px;padding:11px 12px 9px;border-top:1px solid var(--line);
            background:var(--panel2);border-radius:0 0 8px 8px}
-  #readout b,#bn_readout b{color:var(--fg)}
+  #readout b,#bn_readout b,#bp_readout b{color:var(--fg)}
   .mrow{display:flex;gap:10px;align-items:baseline;padding:2px 0}
+  .mrow.now{background:color-mix(in srgb,var(--accent) 10%,transparent);border-radius:5px}
   .mlbl{flex:none;width:76px;text-align:right;font-size:10px;text-transform:uppercase;
         letter-spacing:.07em;color:var(--dim2);font-family:ui-sans-serif,system-ui}
   .mval{flex:1;min-width:0;line-height:1.75;word-break:break-word}
   .iv{color:var(--accent2);font-weight:700}       /* input values   */
   .wv{color:var(--accent);font-weight:700}        /* kernel weights */
   .xv{color:var(--accent2);font-weight:700}       /* raw values           */
-  .sv{color:#d2a8ff;font-weight:700}              /* the pooled statistic */
+  .sv{color:var(--violet);font-weight:700}              /* the pooled statistic */
   .pv{color:var(--accent);font-weight:700}        /* gamma / beta         */
+  .fv{color:var(--accent2);font-weight:700}       /* a value going forward */
+  .gv{color:var(--violet);font-weight:700}              /* a gradient coming back */
   .term{padding:1px 5px;margin:1px 1px;border-radius:4px;white-space:nowrap;display:inline-block;
         background:color-mix(in srgb,var(--line) 42%,transparent)}
   .term.on{background:color-mix(in srgb,var(--accent2) 30%,transparent);color:var(--fg)}
@@ -119,6 +139,12 @@
   .more{color:var(--dim2)}
   .legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--dim);margin-top:9px}
   .sw{width:11px;height:11px;border-radius:3px;display:inline-block;vertical-align:-1px;margin-right:5px}
+  /* the one colour ramp the backprop page uses for every number */
+  .ramp{width:104px;height:11px;border-radius:3px;display:inline-block;vertical-align:-1px;
+        border:1px solid var(--line);
+        background:linear-gradient(90deg,var(--accent),
+                   color-mix(in srgb,var(--accent) 6%,transparent) 46%,
+                   color-mix(in srgb,var(--accent2) 6%,transparent) 54%,var(--accent2))}
   .drop{outline:2px dashed var(--accent);outline-offset:5px;border-radius:8px}
   .credit{font-size:10.5px;color:var(--dim2);margin-top:8px;line-height:1.45}
 

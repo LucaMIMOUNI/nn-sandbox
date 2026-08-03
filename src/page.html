@@ -4,6 +4,7 @@
     <button data-view="conv">Conv2d</button>
     <button data-view="convT">ConvTranspose2d</button>
     <button data-view="norm">Normalisation</button>
+    <button data-view="backprop">Backprop</button>
   </div>
 </div>
 
@@ -110,6 +111,7 @@
     then rescale with <span class="pv">γ</span> and <span class="pv">β</span>. The only thing that changes
     between BatchNorm, LayerNorm, InstanceNorm and GroupNorm is <b>which numbers get pooled into one mean</b>.
     <b>Hover any cell</b>: everything outside its pooling group is greyed out, and the maths is written underneath.
+    At the bottom, the problem it was invented for — the input distribution moving under a layer while it trains.
   </p>
 </div>
 
@@ -163,7 +165,7 @@
           <label for="bn_rbet"><span class="pv" id="bn_betlbl"></span><b id="bn_vbet"></b></label>
           <input type="range" id="bn_rbet" min="-3" max="3" step="0.1">
         </div>
-        <div class="hint">Drag these and watch the third bell stretch and slide. They act on the
+        <div class="hint">Drag these and watch the third curve stretch and slide. They act on the
           channel you are pointing at.</div>
         <div class="hint" id="bn_afftable" style="margin-top:7px;line-height:1.7"></div>
       </div>
@@ -231,6 +233,24 @@
       <div id="bn_distwrap"><canvas id="bn_dist"></canvas></div>
       <div class="note" id="bn_distnote"></div>
     </div>
+    <div class="panel">
+      <h2>Covariate shift — the target the next layer is chasing</h2>
+      <div id="bn_cswrap"><canvas id="bn_cs"></canvas></div>
+      <div class="stepbar">
+        <button id="bn_csprev">◀</button>
+        <b id="bn_cslabel"></b>
+        <button id="bn_csnext">▶</button>
+        <button id="bn_csplay">▶ train</button>
+        <span class="hint" style="margin:0">watch the left stack walk out of the band while the right one
+          holds still</span>
+      </div>
+      <div class="note" id="bn_csnote"></div>
+      <div class="credit">Framing follows
+        <a href="https://medium.com/@piyushkashyap045/understanding-batch-normalization-in-deep-learning-a-beginners-guide-40917c5bebc8"
+           target="_blank" rel="noopener">Piyush Kashyap, <em>Understanding Batch Normalization in Deep
+           Learning</em></a>, and the original <a href="https://arxiv.org/abs/1502.03167" target="_blank"
+           rel="noopener">Ioffe &amp; Szegedy, 2015</a>.</div>
+    </div>
   </div>
 
   <!-- ============ RIGHT: shape, cost, diagnostics ============ -->
@@ -254,6 +274,127 @@
     <div class="panel">
       <h2>Diagnostics</h2>
       <div id="bn_diag"></div>
+    </div>
+  </div>
+
+</div>
+</section>
+
+<!-- ================================================================
+     VIEW 4 — backpropagation
+     ================================================================ -->
+<section class="view hidden" id="view-backprop">
+<div class="hero">
+  <h1>Backprop, one derivative at a time</h1>
+  <p class="sub">
+    One neuron fitted to a handful of points. The <b>forward pass</b> runs left to right along the top —
+    each station carries its own equation with this point's numbers already substituted in, and is filled
+    with the colour of the number it holds: <b>strong when it is large, faded as it approaches zero</b>.
+    The <b>backward pass</b> runs right to left directly underneath, station for station, so every
+    <span class="gv">gradient</span> sits below the <span class="fv">value</span> it came from. Inside the
+    neuron and the loss, the derivative being multiplied is drawn as a <span class="gv">tangent line</span> —
+    flat means the gradient dies there. <b>Drag a wire</b> to change its weight, or
+    <b>press play</b> and watch the curve settle onto the points as the error bars shrink.
+  </p>
+</div>
+
+<div class="app">
+
+  <!-- ============ LEFT: the problem ============ -->
+  <div class="col-left side">
+    <div class="panel">
+      <h2>Data</h2>
+      <div class="stack-btns" id="bp_setseg"></div>
+      <div class="hint" id="bp_setnote" style="margin-top:6px"></div>
+
+      <div class="divider"></div>
+      <h2>Parameters</h2>
+      <div id="bp_wctrls"></div>
+      <button id="bp_rand" style="width:100%">↺ re-initialise w, b</button>
+      <div class="hint" style="margin-top:5px">Uniform on ±1/√fan_in — what <code>nn.Linear</code> does.</div>
+
+      <div class="divider"></div>
+      <h2>Activation</h2>
+      <div class="seg wide" id="bp_actseg">
+        <button data-act="linear">linear</button>
+        <button data-act="sigmoid">sigmoid</button>
+        <button data-act="tanh">tanh</button>
+        <button data-act="relu">relu</button>
+      </div>
+      <div class="hint" id="bp_acthint" style="margin-top:5px"></div>
+
+      <div class="divider"></div>
+      <h2>Learning rate <span style="text-transform:none">&eta;</span></h2>
+      <div class="seg wide" id="bp_lrseg">
+        <button data-lr="0.05">.05</button>
+        <button data-lr="0.2">.2</button>
+        <button data-lr="1">1</button>
+        <button data-lr="1.5">1.5</button>
+      </div>
+      <div class="stack-btns">
+        <button id="bp_train">&#9654; train &times;50</button>
+        <button id="bp_reset">&#8634; reset weights and history</button>
+      </div>
+      <div class="hint" id="bp_trainhint" style="margin-top:6px"></div>
+    </div>
+  </div>
+
+  <!-- ============ CENTRE: the network, then the fit ============ -->
+  <div class="col-mid">
+    <div class="panel">
+      <div class="rail" id="bp_rail"></div>
+
+      <div class="stepbar" style="margin-top:0;padding-top:0;border:0">
+        <button id="bp_prev" title="previous step">&#9664;</button>
+        <button id="bp_next" title="next step">&#9654;</button>
+        <button id="bp_play">&#9654; play</button>
+        <span class="hint" id="bp_stephint" style="margin:0"></span>
+      </div>
+
+      <div id="bp_vizwrap"><canvas id="bp_viz"></canvas></div>
+      <div class="hint" id="bp_vizcap" style="margin-top:7px;min-height:32px;line-height:1.5"></div>
+
+      <div id="bp_readout"></div>
+
+      <div class="legend">
+        <span><span class="ramp"></span></span>
+        <span>negative &#8594; zero &#8594; positive, and how strongly</span>
+        <span><span class="sw" style="background:var(--violet)"></span>gradients, and the tangents they are read off</span>
+      </div>
+      <div class="legend" style="margin-top:3px">
+        <span>in the maths: <span class="fv">a value</span>, <span class="wv">a parameter</span>,
+          <span class="gv">a gradient</span> — each chip carries the colour its number has on the canvas</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>The fit, and the loss it produces</h2>
+      <div id="bp_fitwrap"><canvas id="bp_fit"></canvas></div>
+      <div class="stepbar" style="margin-top:6px">
+        <button id="bp_sprev" title="previous point">&#9664;</button>
+        <span id="bp_slabel" class="mono" style="min-width:104px;text-align:center"></span>
+        <button id="bp_snext" title="next point">&#9654;</button>
+        <label class="chk"><input type="checkbox" id="bp_trails"> tails</label>
+        <span class="hint" style="margin:0">hover a point on the plot and the diagram above fills with it</span>
+      </div>
+      <div class="note" id="bp_fitnote"></div>
+    </div>
+  </div>
+
+  <!-- ============ RIGHT: shape, chain rule, diagnostics ============ -->
+  <div class="col-right side">
+    <div class="panel">
+      <h2>Shape &amp; cost</h2>
+      <div class="formula" id="bp_formula"></div>
+      <div class="note" id="bp_shapenote"></div>
+    </div>
+    <div class="panel">
+      <h2>Chain rule</h2>
+      <div class="formula" id="bp_chain"></div>
+    </div>
+    <div class="panel">
+      <h2>Diagnostics</h2>
+      <div id="bp_diag"></div>
     </div>
   </div>
 
