@@ -7,6 +7,10 @@
    carries its own equation with this point's numbers substituted in,
    and is filled with the colour of the number it holds — so the whole
    pass can be read as a picture first and as arithmetic second.
+
+   Seven steps, not five: the backward half is broken up the same way
+   the forward half is, one multiplication per step, and the chain rule
+   printed above the diagram gains a factor at each of them.
    ================================================================== */
 const BP = (function(){
 
@@ -145,13 +149,19 @@ const SETS = {
 };
 
 /* ================================ state ================================ */
+/* Seven stations, not five: the backward half is broken up exactly the way the
+   forward half is, one multiplication per step. Running it in a single jump is
+   what makes the chain rule look like magic. */
 const PHASES = [
-  {id:"z", lbl:"weighted sum", eq:() => "z = Σ wᵢ·xᵢ + b"},
-  {id:"a", lbl:"activation",   eq:() => "a = " + ACT[S.act].call},
-  {id:"L", lbl:"loss",         eq:() => "L = (a − t)²"},
-  {id:"g", lbl:"backward",     eq:() => "∂L/∂w = ∂L/∂a · ∂a/∂z · x"},
-  {id:"u", lbl:"update",       eq:() => "w ← w − η · ∂L/∂w"},
+  {id:"z",  lbl:"weighted sum", eq:() => "z = Σ wᵢ·xᵢ + b"},
+  {id:"a",  lbl:"activation",   eq:() => "a = " + ACT[S.act].call},
+  {id:"L",  lbl:"loss",         eq:() => "L = (a − t)²"},
+  {id:"ga", lbl:"loss slope",   eq:() => "∂L/∂a = 2(a − t)"},
+  {id:"gz", lbl:"through f",    eq:() => "∂L/∂z = ∂L/∂a · ∂a/∂z"},
+  {id:"gw", lbl:"onto w and b", eq:() => "∂L/∂w = ∂L/∂z · x"},
+  {id:"u",  lbl:"update",       eq:() => "w ← w − η · ∂L/∂w"},
 ];
+const PH = {z:0, a:1, L:2, ga:3, gz:4, gw:5, u:6};
 
 const S = {
   set:"line", nin:1, data:[],
@@ -207,31 +217,8 @@ function compute(){
   G = GS[S.sample];
 }
 
-// the same forward pass with no graph at all — only for differencing
-function lossAt(w, b){
-  let s = 0;
-  for(const d of S.data){
-    let z = b;
-    for(let i=0;i<S.nin;i++) z += w[i]*d.x[i];
-    const e = ACT[S.act].raw(z) - d.t;
-    s += e*e;
-  }
-  return s/(S.data.length || 1);
-}
-
-function gradCheck(){
-  const h = 1e-4, rows = [];
-  for(let i=0;i<S.nin;i++){
-    const up = S.w.slice(); up[i] += h;
-    const dn = S.w.slice(); dn[i] -= h;
-    rows.push({name:`∂L/∂w${SUB[i]}`, engine:GRAD.w[i], num:(lossAt(up, S.b) - lossAt(dn, S.b))/(2*h)});
-  }
-  rows.push({name:"∂L/∂b", engine:GRAD.b, num:(lossAt(S.w, S.b + h) - lossAt(S.w, S.b - h))/(2*h)});
-  let worst = 0;
-  for(const r of rows) worst = Math.max(worst, Math.abs(r.engine - r.num)/Math.max(1, Math.abs(r.num)));
-  return {rows, worst};
-}
-
+// the finite-difference check that used to sit in a Diagnostics panel now lives
+// in verify/backprop.py, which runs it over 1331 configurations instead of one
 const diverged = () => !isFinite(LOSS) || LOSS > 1e8;
 
 function applyUpdate(){
@@ -348,12 +335,17 @@ const fmtg = v => {
   return v.toFixed(a < 1 ? 3 : 2);
 };
 
-function fitCanvas(cv, w, h){
+// w, h are drawing units; css is the width to display them at. Below the width
+// the diagram needs, the whole thing scales down rather than growing a
+// scrollbar — and the hit tests keep working, since they convert through
+// the element's real size either way.
+function fitCanvas(cv, w, h, css){
   const dpr = devicePixelRatio || 1;
   const W = Math.round(w*dpr), H = Math.round(h*dpr);
-  if(cv.width !== W || cv.height !== H){       // only resize when it changed — this repaints per frame
-    cv.width = W; cv.height = H;
-    cv.style.width = w + "px"; cv.style.height = h + "px";
+  const cw = css || w;
+  if(cv.width !== W || cv.height !== H || parseFloat(cv.style.width) !== cw){
+    cv.width = W; cv.height = H;                // only resize when it changed — this repaints per frame
+    cv.style.width = cw + "px"; cv.style.height = Math.round(h*cw/w) + "px";
   }
   const g = cv.getContext("2d");
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -386,8 +378,11 @@ const ROWH = 21;
 let LY = null;                           // the layout the last paint used — hit tests read it
 
 function layout(){
-  const avail = Math.max(832, Math.min(1120, (el("vizwrap").clientWidth || 900) - 2));
-  const lead = 124, gap = 40;                    // the wire run, then the gaps between cards
+  const room = (el("vizwrap").clientWidth || 900) - 2;
+  const avail = Math.max(800, Math.min(1240, room));
+  // the wire run, then the gaps between cards. The wires are the one part that
+  // can give ground when the column is tight, so they do it first
+  const lead = avail < 900 ? 84 : 124, gap = 40;
   const sx = IN_X + IN_R + lead;
   const extra = Math.max(0, avail - 12 - sx - 2*gap - (CW.sum + CW.act + CW.loss));
   const sum = CW.sum + extra*0.42, act = CW.act + extra*0.29, loss = CW.loss + extra*0.29;
@@ -395,7 +390,8 @@ function layout(){
   const grows = S.nin === 1 ? 3 : 4;                     // ∂L/∂w… , ∂L/∂b , ∂L/∂x
   const bh = 24 + grows*ROWH + 8;
   const uy = BY + bh + 16;
-  return {w:avail, h: uy + UH + 10, gap, sum, act, loss, sx, ax, lx, right: lx + loss, bh, uy};
+  return {w:avail, css: Math.min(room, avail), h: uy + UH + 10,
+          gap, sum, act, loss, sx, ax, lx, right: lx + loss, bh, uy};
 }
 
 // the sum card writes one row per term, and every wire lands on its own row
@@ -450,14 +446,15 @@ function liveSet(){
 function paint(){
   const P = palette();
   LY = layout();
-  const g = fitCanvas(el("viz"), LY.w, LY.h);
+  const g = fitCanvas(el("viz"), LY.w, LY.h, LY.css);
   g.clearRect(0, 0, LY.w, LY.h);
 
   const A = ACT[S.act];
   const live = liveSet();
   const al = (...parts) => (live && !parts.some(p => live.has(p))) ? 0.15 : 1;
   const p = S.phase, ph = (frame % 120)/120;
-  const showG = p >= 3 && !diverged();
+  const on = k => p >= PH[k] && !diverged();      // has the pass reached this station
+  const showG = on("ga");
 
   g.lineJoin = "round";
   g.textBaseline = "middle";
@@ -479,7 +476,7 @@ function paint(){
   /* ---- station 1: the weighted sum, written out ---- */
   card(g, P, LY.sx, FY, LY.sum, FH, al("sum"));
   g.globalAlpha = al("sum");
-  label(g, P, LY.sx + 10, FY + 14, "1 · z = Σ wᵢ·xᵢ + b");
+  label(g, P, LY.sx + 10, FY + 14, "1)  z = Σ wᵢ·xᵢ + b");
   g.globalAlpha = 1;
   for(let i=0;i<S.nin;i++)
     termRow(g, P, LY.sx, LY.sum, rowY(i), `w${SUB[i]}·x${SUB[i]}`,
@@ -497,10 +494,10 @@ function paint(){
   arrow(g, P, LY.sx + LY.sum, FY + FH/2, LY.ax, FY + FH/2, al("sum", "act"), "z");
 
   /* ---- station 2: the activation, and its slope drawn as a tangent ---- */
-  card(g, P, LY.ax, FY, LY.act, FH, al("act"), p >= 1 ? ramp(G.a.d, 1.2, P, 0.02, 0.18) : null);
+  card(g, P, LY.ax, FY, LY.act, FH, al("act"), p >= PH.a ? ramp(G.a.d, 1.2, P, 0.02, 0.18) : null);
   g.globalAlpha = al("act");
-  label(g, P, LY.ax + 10, FY + 14, `2 · a = ${A.call}`);
-  if(p >= 1){
+  label(g, P, LY.ax + 10, FY + 14, `2)  a = ${A.call}`);
+  if(p >= PH.a){
     sparkAct(g, P, LY.ax + 12, FY + 24, LY.act - 24, 62);
     g.textAlign = "left"; g.font = "700 14px ui-monospace,Menlo,monospace"; g.fillStyle = P.text;
     g.fillText("a = " + fmt(G.a.d), LY.ax + 12, FY + 102);
@@ -522,10 +519,10 @@ function paint(){
   g.fillText("target " + fmt(G.d.t), tcx, 26);
   g.globalAlpha = 1;
 
-  card(g, P, LY.lx, FY, LY.loss, FH, al("loss"), p >= 2 ? ramp(G.L.d, 1, P, 0.02, 0.2) : null);
+  card(g, P, LY.lx, FY, LY.loss, FH, al("loss"), p >= PH.L ? ramp(G.L.d, 1, P, 0.02, 0.2) : null);
   g.globalAlpha = al("loss");
-  label(g, P, LY.lx + 10, FY + 14, "3 · L = (a − t)²");
-  if(p >= 2){
+  label(g, P, LY.lx + 10, FY + 14, "3)  L = (a − t)²");
+  if(p >= PH.L){
     sparkLoss(g, P, LY.lx + 12, FY + 24, LY.loss - 24, 62);
     g.textAlign = "left"; g.font = "700 14px ui-monospace,Menlo,monospace"; g.fillStyle = P.text;
     g.fillText("L = " + fmt(G.L.d, 4), LY.lx + 12, FY + 102);
@@ -538,24 +535,28 @@ function paint(){
   bandLabel(g, P, showG ? "backward — the same wires, the other way"
                         : "backward — not run yet", 8, BY - 14);
   const boxes = backBoxes();
-  if(!showG){
-    ghost(g, P, boxes.p.x, BY, boxes.p.w, LY.bh, "∂L/∂w, ∂L/∂b");
-    ghost(g, P, boxes.z.x, BY, boxes.z.w, LY.bh, "∂L/∂z");
-    ghost(g, P, boxes.a.x, BY, boxes.a.w, LY.bh, "∂L/∂a");
-  }
-  if(showG){
+
+  // one station per step, each holding its place as a dashed outline until the
+  // pass gets there — the row never reflows underneath you
+  if(on("ga")){
     // it starts at the loss: dL/dL is 1 by definition
     downArrow(g, P, tcx, FY + FH, BY, al("loss", "ga"), "∂L/∂L = 1", ph);
-
-    gradBox(g, P, boxes.a, "∂L/∂a", "2(a − t)",
+    gradBox(g, P, boxes.a, "4)  ∂L/∂a", "2(a − t)",
             `2( ${fmt(G.a.d)} − ${par(fmt(G.d.t))} )`, G.a.g, al("ga"));
-    gradBox(g, P, boxes.z, "∂L/∂z", "∂L/∂a · ∂a/∂z",
+  } else ghost(g, P, boxes.a.x, BY, boxes.a.w, LY.bh, "4)  ∂L/∂a");
+
+  if(on("gz")){
+    gradBox(g, P, boxes.z, "5)  ∂L/∂z", "∂L/∂a · ∂a/∂z",
             `${fmtg(G.a.g)} · ${par(fmtg(G.a.local))}`, G.z.g, al("gz"));
     backArrow(g, P, boxes.a.x, boxes.z.x + boxes.z.w, BY + LY.bh/2, al("ga", "gz"), ph);
-    backArrow(g, P, boxes.z.x, boxes.p.x + boxes.p.w, BY + LY.bh/2, al("gz", "gp"), ph);
+  } else ghost(g, P, boxes.z.x, BY, boxes.z.w, LY.bh, "5)  ∂L/∂z");
 
+  if(on("gw")){
     paramBox(g, P, boxes.p, al);
+    backArrow(g, P, boxes.z.x, boxes.p.x + boxes.p.w, BY + LY.bh/2, al("gz", "gp"), ph);
+  } else ghost(g, P, boxes.p.x, BY, boxes.p.w, LY.bh, "6)  ∂L/∂w, ∂L/∂b");
 
+  if(showG){
     // what the backward pass reuses from the forward one — drawn only for the
     // path being pointed at, because that is the whole reason activations are cached
     if(live){
@@ -569,18 +570,20 @@ function paint(){
         g.stroke();
       };
       const rowMid = i => BY + 26 + i*ROWH + ROWH/2;
-      if(live.has("gz") && live.size === 2) drop(LY.ax + LY.act/2);
+      if(on("gz") && live.has("gz") && live.size === 2) drop(LY.ax + LY.act/2);
       if(live.has("ga") && live.size === 2) drop(LY.lx + 26);
-      for(let i=0;i<S.nin;i++) if(live.has("gw" + i)) elbow(inY(i), rowMid(i));
-      if(live.has("gb")) elbow(biasY(), rowMid(S.nin));
+      if(on("gw")){
+        for(let i=0;i<S.nin;i++) if(live.has("gw" + i)) elbow(inY(i), rowMid(i));
+        if(live.has("gb")) elbow(biasY(), rowMid(S.nin));
+      }
       g.setLineDash([]); g.globalAlpha = 1;
     }
   }
 
   /* ---- the update, using the mean over every point ---- */
-  if(p >= 4 && !diverged()) updateRow(g, P, LY.uy, al("upd"));
-  else if(p >= 4) ghost(g, P, 8, LY.uy, LY.right - 8, UH, "diverged — nothing to apply");
-  else            ghost(g, P, 8, LY.uy, LY.right - 8, UH, "w ← w − η · ∂L/∂w");
+  if(on("u"))            updateRow(g, P, LY.uy, al("upd"));
+  else if(p >= PH.u)     ghost(g, P, 8, LY.uy, LY.right - 8, UH, "diverged — nothing to apply");
+  else                   ghost(g, P, 8, LY.uy, LY.right - 8, UH, "7)  w ← w − η · ∂L/∂w");
 }
 
 /* ---------- pieces ---------- */
@@ -749,7 +752,7 @@ function paramBox(g, P, box, al){
   card(g, P, box.x, BY, box.w, LY.bh, al("gp"));
   g.globalAlpha = al("gp");
   g.textAlign = "left"; g.font = "600 11px ui-monospace,Menlo,monospace"; g.fillStyle = P.gradCss;
-  g.fillText("∂L/∂z spreads onto every parameter", box.x + 12, BY + 16);
+  g.fillText("6)  ∂L/∂z spreads onto every parameter", box.x + 12, BY + 16);
   g.globalAlpha = 1;
 
   const row = (i, lhs, rhs, val, part, faint) => {
@@ -785,7 +788,7 @@ function updateRow(g, P, y, alpha){
   g.fillStyle = P.frame; roundRect(g, 8, y, LY.right - 8, UH, 9); g.fill();
   g.strokeStyle = P.frameLine; g.lineWidth = 1.2; roundRect(g, 8, y, LY.right - 8, UH, 9); g.stroke();
   g.textAlign = "left"; g.font = "9.5px ui-monospace,Menlo,monospace"; g.fillStyle = P.dim;
-  g.fillText(`5 · w ← w − η·∂L/∂w   with η = ${fmt(S.lr)} and the gradient averaged over all ${S.data.length} points`,
+  g.fillText(`7)  w ← w − η·∂L/∂w   with η = ${fmt(S.lr)} and the gradient averaged over all ${S.data.length} points`,
              18, y + 11);
 
   let x = 18;
@@ -886,20 +889,24 @@ function sparkLoss(g, P, x, y, w, h){
 }
 
 /* ====================== the fit, and the loss ======================
-   Deliberately plain: the points, the curve the neuron currently is, and one
-   short bar per point joining what it says to what it should say. The faint
-   trails behind each prediction are the only history kept — that is the
-   evolution of every point, one update at a time.
+   Three marks and nothing else: a dot per point, one curve for the neuron, and
+   a hairline joining each dot to the curve — that hairline is the point's
+   error, so watching them shorten *is* watching the loss fall. History is one
+   dashed line where the curve started, and a tail on the selected point only.
    ================================================================== */
-const FH2 = 258, PADL = 34, PADR = 12, PADT = 20, PADB = 24, GAPX = 30;
+const PADL = 32, PADR = 10, PADT = 18, PADB = 22;
+const AH = 196, BH = 128;                      // the fit, then the loss under it
+const FH2 = PADT + AH + PADB + 14 + PADT + BH + PADB;
 
-function fitWidth(){ return Math.max(660, (el("fitwrap").clientWidth || 900) - 2); }
+function fitWidth(){ return Math.max(228, (el("fitwrap").clientWidth || 300) - 2); }
 
 // the plot box, derived once and used by both the drawing and the hover test —
 // computing it twice is how hit targets drift off the dots
 function plotBox(){
-  const W = fitWidth(), splitX = Math.round(W*0.62);
-  return {x:PADL, y:PADT, w: splitX - PADL - PADR, h: FH2 - PADT - PADB};
+  return {x:PADL, y:PADT, w: fitWidth() - PADL - PADR, h:AH};
+}
+function lossBox(){
+  return {x:PADL, y: PADT + AH + PADB + 14 + PADT, w: fitWidth() - PADL - PADR, h:BH};
 }
 const XR = [-2.5, 2.5], XR2 = [-2.6, 2.6];
 function yRange(){
@@ -938,21 +945,36 @@ function paintFit(){
   const g = fitCanvas(el("fit"), W, FH2);
   g.clearRect(0, 0, W, FH2);
 
-  const splitX = Math.round(W*0.62);
-  const A = plotBox();
-  const B = {x: splitX + PADL + GAPX, y:PADT, w: W - splitX - PADL - PADR - GAPX, h: FH2 - PADT - PADB};
+  (S.nin === 1 ? curvePanel : planePanel)(g, P, plotBox());
+  lossPanel(g, P, lossBox());
 
-  (S.nin === 1 ? curvePanel : planePanel)(g, P, A);
-  lossPanel(g, P, B);
+  el("fitnote").innerHTML = notes().join("<br><br>");
+}
 
-  el("fitnote").innerHTML = diverged()
-    ? `<span class="err">Diverged.</span> η = ${S.lr} takes steps wider than the bowl, so each one lands
-       further out than the last. Lower η and reset.`
-    : SETS[S.set].why +
-      `<br><br>Each point has two marks: <b>●</b> where it should be, <b>○</b> where the neuron currently
-       puts it. The bar between them is that point's error, and its colour is the number
-       <span class="gv">∂L/∂a</span> is built from. The faint tails show where each ○ has been —
-       ${S.steps ? `${S.steps} update${S.steps === 1 ? "" : "s"} of it so far.` : `press ▶ and they appear.`}`;
+/* nothing under the plots unless there is something to say — and a dead ReLU or
+   a saturated sigmoid shows up here before it shows up anywhere else */
+function notes(){
+  if(diverged())
+    return [`<span class="err">Diverged.</span> η = ${S.lr} takes steps wider than the bowl, so each one
+             lands further out than the last. Lower η and reset.`];
+
+  const out = [];
+  const maxSlope = Math.max(0, ...GS.map(g => Math.abs(g.a.local)));
+  if(maxSlope < 1e-3 && S.act !== "linear")
+    out.push(S.act === "relu"
+      ? `<b>Dead ReLU.</b> z is negative at every point, so the unit outputs 0 and blocks the gradient
+         completely. The errors are at full intensity and nothing moves — press ▶ and watch it not learn.`
+      : `<b>Vanishing gradient.</b> The activation is saturated at every point, so the violet tangent
+         inside the neuron is flat. Every gradient is multiplied by that, and the weights barely move
+         however wrong the fit is.`);
+  else if(maxSlope < 0.05 && S.act !== "linear")
+    out.push(`The steepest ∂a/∂z in the batch is only ${fmtg(maxSlope)}, so the weights get a fraction of
+              whatever the loss asks for — these hairlines will shrink very slowly.`);
+  else if(S.steps > 0 && LOSS < 1e-5)
+    out.push(`Converged: L = ${LOSS.toExponential(1)}. The errors have faded to nothing and the gradients
+              with them, so the updates have nothing left to do.`);
+
+  return out;
 }
 
 function axes(g, P, B, xr, yr, xlbl, ylbl, title){
@@ -990,70 +1012,58 @@ function curvePanel(g, P, B){
   const xr = XR, yr = yRange();
   const f = (w, b, x) => ACT[S.act].raw(w*x + b);
   const {sx, sy} = axes(g, P, B, xr, yr, "x", "value",
-                        `the fit — ${S.data.length} points, and where the neuron puts each of them`);
+                        `the fit — ${S.data.length} points`);
 
   g.save();
   g.beginPath(); g.rect(B.x, B.y, B.w, B.h); g.clip();
 
-  const hist = S.trails ? history(Math.min(14, S.track.length)) : [];
-
-  // where the curve started, so the whole move is visible at a glance
-  if(S.track.length){
-    const t0 = S.track[0];
-    g.strokeStyle = P.dim2; g.globalAlpha = 0.45; g.lineWidth = 1;
-    g.setLineDash([4,4]);
+  const curve = (w, b, col, dash, width, alpha) => {
+    g.strokeStyle = col; g.lineWidth = width; g.globalAlpha = alpha;
+    if(dash) g.setLineDash([4,4]);
     g.beginPath();
-    for(let j=0;j<=80;j++){
-      const x = xr[0] + j/80*(xr[1] - xr[0]);
-      j ? g.lineTo(sx(x), sy(f(t0.w[0], t0.b, x))) : g.moveTo(sx(x), sy(f(t0.w[0], t0.b, x)));
+    for(let j=0;j<=120;j++){
+      const x = xr[0] + j/120*(xr[1] - xr[0]);
+      j ? g.lineTo(sx(x), sy(f(w, b, x))) : g.moveTo(sx(x), sy(f(w, b, x)));
     }
-    g.stroke(); g.setLineDash([]); g.globalAlpha = 1;
-  }
+    g.stroke();
+    g.setLineDash([]); g.globalAlpha = 1;
+  };
 
-  // the tail each prediction has dragged behind it, fading towards the oldest end
-  // so it reads as a direction and not as a stray line
-  if(hist.length > 1)
-    S.data.forEach((d, i) => {
-      const ys = hist.map(t => sy(f(t.w[0], t.b, d.x[0])));
-      ys.push(sy(f(S.w[0], S.b, d.x[0])));
-      const top = i === S.sample ? 0.6 : 0.24;
-      g.strokeStyle = P.dim2;
-      g.lineWidth = i === S.sample ? 1.6 : 1;
-      for(let k=1;k<ys.length;k++){
-        g.globalAlpha = top*(0.15 + 0.85*k/(ys.length - 1));
-        seg(g, sx(d.x[0]), ys[k-1], sx(d.x[0]), ys[k]);
-      }
-      g.globalAlpha = 1;
-    });
+  // where the curve started, so the whole move is one glance
+  if(S.track.length) curve(S.track[0].w[0], S.track[0].b, P.dim2, true, 1, 0.5);
 
-  // the error of every point: target to prediction
+  // one hairline per point, dot to curve: that is its error
   S.data.forEach((d, i) => {
-    const y = f(S.w[0], S.b, d.x[0]), r = y - d.t;
-    g.strokeStyle = ramp(r, 1, P, 0.12, 0.9);
-    g.lineWidth = i === S.sample ? 4 : 2.4;
+    const y = f(S.w[0], S.b, d.x[0]);
+    g.strokeStyle = ramp(y - d.t, 1, P, 0.25, 0.85);
+    g.lineWidth = i === S.sample ? 3 : 1.4;
     seg(g, sx(d.x[0]), sy(d.t), sx(d.x[0]), sy(y));
   });
 
-  // the curve the neuron currently is
-  g.strokeStyle = P.accent; g.lineWidth = 2;
-  g.beginPath();
-  for(let j=0;j<=120;j++){
-    const x = xr[0] + j/120*(xr[1] - xr[0]);
-    j ? g.lineTo(sx(x), sy(f(S.w[0], S.b, x))) : g.moveTo(sx(x), sy(f(S.w[0], S.b, x)));
+  curve(S.w[0], S.b, P.accent, false, 2, 1);
+
+  // only the selected point keeps a tail — thirteen of them was a thicket
+  if(S.trails && S.track.length > 1){
+    const d = S.data[S.sample];
+    const ys = history(Math.min(20, S.track.length)).map(t => sy(f(t.w[0], t.b, d.x[0])));
+    ys.push(sy(f(S.w[0], S.b, d.x[0])));
+    g.strokeStyle = P.accent; g.lineWidth = 1.4;
+    for(let k=1;k<ys.length;k++){
+      g.globalAlpha = 0.12 + 0.5*k/(ys.length - 1);
+      seg(g, sx(d.x[0]), ys[k-1], sx(d.x[0]), ys[k]);
+    }
+    g.globalAlpha = 1;
   }
-  g.stroke();
 
-  // ● the target, ○ what the neuron says
+  // the points themselves — where each one should be
   S.data.forEach((d, i) => {
-    const on = i === S.sample;
-    const py = sy(f(S.w[0], S.b, d.x[0]));
-    g.fillStyle = P.panel;
-    g.beginPath(); g.arc(sx(d.x[0]), py, on ? 4 : 2.8, 0, 6.2832); g.fill();
-    g.strokeStyle = P.accent; g.lineWidth = on ? 1.8 : 1.2; g.stroke();
-
-    g.fillStyle = ramp(d.t, Math.max(1, Math.abs(yr[0]), Math.abs(yr[1])), P, 0.3, 0.95);
-    g.beginPath(); g.arc(sx(d.x[0]), sy(d.t), on ? 5.5 : 4, 0, 6.2832); g.fill();
-    g.strokeStyle = on ? P.text : P.frameLine; g.lineWidth = on ? 2 : 1; g.stroke();
+    const sel = i === S.sample;
+    g.fillStyle = P.text;
+    g.beginPath(); g.arc(sx(d.x[0]), sy(d.t), sel ? 4.5 : 3, 0, 6.2832); g.fill();
+    if(sel){
+      g.strokeStyle = P.accent; g.lineWidth = 1.6;
+      g.beginPath(); g.arc(sx(d.x[0]), sy(d.t), 8.5, 0, 6.2832); g.stroke();
+    }
   });
   g.restore();
 }
@@ -1074,7 +1084,7 @@ function planePanel(g, P, B){
   g.restore();
 
   const {sx, sy} = axes(g, P, B, xr, yr, "x₁", "x₂",
-                        `the fit — ${S.data.length} points, and the line the neuron draws between them`);
+                        `the boundary — ${S.data.length} points`);
 
   // w·x + b = 0 is a straight line whatever the squash does to it afterwards
   const bound = (w, b, col, dash, width) => {
@@ -1113,7 +1123,7 @@ function lossPanel(g, P, B){
   const pts = S.hist.concat([isFinite(LOSS) ? LOSS : 0]);
   const top = Math.max(1e-9, ...pts.filter(v => isFinite(v)));
   const {sx, sy} = axes(g, P, B, [0, Math.max(1, pts.length - 1)], [0, top], "update", "L",
-                        `the loss it produces — ${S.steps} update${S.steps === 1 ? "" : "s"}`);
+                        `the loss — ${S.steps} update${S.steps === 1 ? "" : "s"}`);
 
   if(pts.length > 1){
     g.save(); g.beginPath(); g.rect(B.x, B.y, B.w, B.h); g.clip();
@@ -1132,22 +1142,34 @@ function lossPanel(g, P, B){
   g.fillText("L = " + fmt(pts[last], 4), B.x + B.w - 5, B.y + 14);
 }
 
-/* ======================= the ledger under the canvas ======================= */
-const fv  = v => `<span class="fv">${fmt(v)}</span>`;
-const fvp = v => `<span class="fv">${par(fmt(v))}</span>`;
+/* ======================= the sheet under the canvas ======================= */
+const fv = v => `<span class="fv">${fmt(v)}</span>`;
 const wv = v => `<span class="wv">${fmt(v)}</span>`;
-const gv  = v => `<span class="gv">${fmtg(v)}</span>`;
-const gvp = v => `<span class="gv">${par(fmtg(v))}</span>`;
+const gv = v => `<span class="gv">${fmtg(v)}</span>`;
+// ∂L/∂a must not be shouted into ∂L/∂A, so a label carrying a derivative keeps
+// its own case
+const mlbl = l => `<span class="mlbl${l.indexOf("∂") < 0 ? "" : " raw"}">${l}</span>`;
 function mrow(phase, label, html){
-  return `<div class="mrow${phase === S.phase ? " now" : ""}"><span class="mlbl">${label}</span>
+  return `<div class="mrow${phase === S.phase ? " now" : ""}">${mlbl(label)}
           <span class="mval">${html}</span></div>`;
 }
-
-// every chip carries the same colour its number has on the canvas
-function chip(id, body, fill){
-  return `<span class="term${S.chip === id ? " on" : ""}"${fill ? ` style="background:${fill}"` : ""}
-          data-chip="${id}">${body}</span>`;
+// the same row, but its body is an equation: symbols on the line, the numbers
+// they currently hold hung underneath. The equation is what stays put.
+function erow(phase, label, parts){
+  return `<div class="mrow${phase === S.phase ? " now" : ""}">${mlbl(label)}
+          <span class="eq">${parts.join("")}</span></div>`;
 }
+function tt(sym, num, o){
+  o = o || {};
+  const cls = ["tt", o.cls, o.chip && S.chip === o.chip ? "on" : ""].filter(Boolean).join(" ");
+  return `<span class="${cls}"${o.chip ? ` data-chip="${o.chip}"` : ""}` +
+         `${o.fill ? ` style="background:${o.fill}"` : ""}>` +
+         `<b>${sym}</b><u${o.vc ? ` class="${o.vc}"` : ""}>${num == null ? "" : num}</u></span>`;
+}
+const op  = s => tt(s, "", {cls:"op"});
+const res = v => `<span class="res">${v}</span>`;
+
+// every pill carries the same colour its number has on the canvas
 function plain(body, fill){
   return `<span class="term"${fill ? ` style="background:${fill}"` : ""}>${body}</span>`;
 }
@@ -1161,153 +1183,138 @@ function selInfo(){
           local:G.d.x[s.i], localTxt:"x" + SUB[s.i]};
 }
 
+/* The sheet is written symbolically once — the letters never move. Under each
+   letter hangs the number it is holding for this point, and those are the only
+   things that change as you step, drag a wire or scrub through the data. */
 function renderMath(){
   const P = palette(), A = ACT[S.act], p = S.phase, out = [];
+  const gfill = v => gramp(v, P, 0.06, 0.34);
 
   out.push(mrow(-1, "point", `<b>${S.sample + 1} of ${S.data.length}</b>
-    <span style="color:var(--dim2)">— hover a point on the fit below, or use ◀ ▶</span>`));
+    <span style="color:var(--dim2)">— hover a point on the fit, or use ◀ ▶</span>`));
 
-  const terms = G.prod.map((prod, i) =>
-    chip("t" + i, `${wv(S.w[i])} · ${fv(G.d.x[i])} = <b>${fmt(prod.d)}</b>`, ramp(prod.d, ZMAX, P, 0.06, 0.4)));
-  out.push(mrow(0, "1 · sum", terms.join(" + ") + " + " +
-    chip("tb", `b = ${wv(S.b)}`, ramp(S.b, WMAX, P, 0.06, 0.4)) +
-    ` &nbsp;=&nbsp; <span class="res">${fmt(G.z.d)}</span>`));
+  /* 1) the weighted sum, one term per wire */
+  const e1 = [tt("z", "", {cls:"hd"}), op("=")];
+  for(let i=0;i<S.nin;i++){
+    if(i) e1.push(op("+"));
+    e1.push(tt(`w${SUB[i]}`, wv(S.w[i]), {chip:"t" + i, fill:ramp(S.w[i], WMAX, P, 0.05, 0.3)}),
+            op("·"),
+            tt(`x${SUB[i]}`, fv(G.d.x[i]), {chip:"t" + i, fill:ramp(G.d.x[i], XMAX, P, 0.05, 0.3)}));
+  }
+  e1.push(op("+"), tt("b", wv(S.b), {chip:"tb", fill:ramp(S.b, WMAX, P, 0.05, 0.3)}),
+          op("="), res(fmt(G.z.d)));
+  out.push(erow(PH.z, "1) sum", e1));
 
-  if(p >= 1) out.push(mrow(1, "2 · activate",
-    `a = ${A.lbl}( ${fv(G.z.d)} ) &nbsp;=&nbsp; <span class="res">${fmt(G.a.d)}</span>
-     <span style="color:var(--dim2)">&nbsp; slope here ∂a/∂z = ${A.der} =</span> ${gv(G.a.local)}`));
+  /* 2) through the activation */
+  if(p >= PH.a) out.push(erow(PH.a, "2) activate", [
+    tt("a", "", {cls:"hd"}), op("="), op(`${A.lbl}(`),
+    tt("z", fv(G.z.d), {fill:ramp(G.z.d, ZMAX, P, 0.05, 0.3)}), op(")"),
+    op("="), res(fmt(G.a.d)),
+  ]));
 
-  if(p >= 2) out.push(mrow(2, "3 · loss",
-    `L = ( ${fv(G.a.d)} − ${fvp(G.d.t)} )² &nbsp;=&nbsp; <span class="res">${fmt(G.L.d, 4)}</span>
-     <span style="color:var(--dim2)">&nbsp; batch L = mean of ${S.data.length} =</span>
-     <b>${fmt(LOSS, 4)}</b>`));
+  /* 3) the loss */
+  if(p >= PH.L) out.push(erow(PH.L, "3) loss", [
+    tt("L", "", {cls:"hd"}), op("="), op("("),
+    tt("a", fv(G.a.d), {fill:ramp(G.a.d, 1.2, P, 0.05, 0.3)}), op("−"),
+    tt("t", fv(G.d.t), {fill:ramp(G.d.t, 1.2, P, 0.05, 0.3)}), op(")²"),
+    op("="), res(fmt(G.L.d, 4)),
+    op("&nbsp;&nbsp;"), tt(`batch L — the mean over all ${S.data.length}`, `<b>${fmt(LOSS, 4)}</b>`, {cls:"op"}),
+  ]));
 
-  if(p >= 3){
-    const s = selInfo();
-    out.push(mrow(3, "4 · chain rule",
-      `∂L/∂${s.name} &nbsp;=&nbsp; ` +
-      chip("dLda", "∂L/∂a") + " · " + chip("dadz", "∂a/∂z") + " · " + chip("dzdp", `∂z/∂${s.name}`) +
-      " &nbsp;=&nbsp; " +
-      chip("dLda", `${gv(G.a.g)}`, gramp(G.a.g, P, 0.06, 0.4)) + " · " +
-      chip("dadz", `${gv(G.a.local)}`, gramp(G.a.local, P, 0.06, 0.4)) + " · " +
-      chip("dzdp", `${fv(s.local)}`, ramp(s.local, XMAX, P, 0.06, 0.4)) +
-      ` &nbsp;=&nbsp; <span class="res">${fmtg(s.node.g)}</span>
-        <span style="color:var(--dim2)">&nbsp;— point the cursor at a wire to switch parameter</span>`));
-    out.push(mrow(3, "all " + S.data.length,
+  /* 4) the first derivative — where the backward pass starts */
+  if(p >= PH.ga) out.push(erow(PH.ga, "4) ∂L/∂a", [
+    tt("∂L/∂a", "", {cls:"hd"}), op("="), op("2 ("),
+    tt("a", fv(G.a.d), {chip:"dLda"}), op("−"), tt("t", fv(G.d.t), {chip:"dLda"}), op(")"),
+    op("="), res(fmtg(G.a.g)),
+  ]));
+
+  /* 5) one multiplication by the local slope of the activation */
+  if(p >= PH.gz) out.push(erow(PH.gz, "5) ∂L/∂z", [
+    tt("∂L/∂z", "", {cls:"hd"}), op("="),
+    tt("∂L/∂a", gv(G.a.g), {chip:"dLda", fill:gfill(G.a.g)}), op("·"),
+    tt("∂a/∂z", gv(G.a.local), {chip:"dadz", fill:gfill(G.a.local)}),
+    op("="), res(fmtg(G.z.g)),
+    op("&nbsp;&nbsp;"), tt(`∂a/∂z = ${A.der}`, "", {cls:"op"}),
+  ]));
+
+  /* 6) and it spreads onto the parameters, one x or w each */
+  if(p >= PH.gw){
+    for(let i=0;i<S.nin;i++) out.push(erow(PH.gw, i ? "" : "6) ∂L/∂w", [
+      tt(`∂L/∂w${SUB[i]}`, "", {cls:"hd"}), op("="),
+      tt("∂L/∂z", gv(G.z.g), {chip:"dadz", fill:gfill(G.z.g)}), op("·"),
+      tt(`x${SUB[i]}`, fv(G.d.x[i]), {chip:"t" + i, fill:ramp(G.d.x[i], XMAX, P, 0.05, 0.3)}),
+      op("="), res(fmtg(G.w[i].g)),
+    ]));
+    out.push(erow(PH.gw, "", [
+      tt("∂L/∂b", "", {cls:"hd"}), op("="),
+      tt("∂L/∂z", gv(G.z.g), {chip:"dadz", fill:gfill(G.z.g)}), op("·"),
+      tt("1", fv(1), {chip:"tb"}),
+      op("="), res(fmtg(G.b.g)),
+    ]));
+    // not parameters — this is the row a deeper net would hand to the layer below
+    for(let i=0;i<S.nin;i++) out.push(erow(PH.gw, "", [
+      tt(`∂L/∂x${SUB[i]}`, "", {cls:"op"}), op("="),
+      tt("∂L/∂z", gv(G.z.g), {cls:"op"}), op("·"),
+      tt(`w${SUB[i]}`, wv(S.w[i]), {cls:"op"}),
+      op("="), op(`<b>${fmtg(G.x[i].g)}</b>`),
+      i ? "" : op("&nbsp;&nbsp;— not a parameter: this is what a deeper net hands to the layer below"),
+    ]));
+    out.push(mrow(PH.gw, "all " + S.data.length,
       GRAD.w.map((v, i) => plain(`∂L/∂w${SUB[i]} = ${gv(v)}`, gramp(v, P, 0.06, 0.45))).join(" ") +
       plain(`∂L/∂b = ${gv(GRAD.b)}`, gramp(GRAD.b, P, 0.06, 0.45)) +
       ` <span style="color:var(--dim2)">— the mean over every point, and what the update actually uses</span>`));
   }
 
-  if(p >= 4){
-    const rows = GRAD.w.map((v, i) =>
-      plain(`w${SUB[i]} ← ${wv(S.w[i])} − ${fmt(S.lr)}·${gvp(v)} = <b>${fmt(S.w[i] - S.lr*v)}</b>`,
-            ramp(S.w[i] - S.lr*v, WMAX, P, 0.06, 0.4)));
-    rows.push(plain(`b ← ${wv(S.b)} − ${fmt(S.lr)}·${gvp(GRAD.b)} = <b>${fmt(S.b - S.lr*GRAD.b)}</b>`,
-                    ramp(S.b - S.lr*GRAD.b, WMAX, P, 0.06, 0.4)));
-    out.push(mrow(4, "5 · update", rows.join(" ")));
+  /* 7) the step itself */
+  if(p >= PH.u){
+    const upd = (name, cur, gr, i) => erow(PH.u, i ? "" : "7) update", [
+      tt(name, "", {cls:"hd"}), op("←"),
+      tt(name, wv(cur), {fill:ramp(cur, WMAX, P, 0.05, 0.3)}), op("−"),
+      tt("η", fmt(S.lr), {cls:"op"}), op("·"),
+      tt(`∂L/∂${name}`, gv(gr), {fill:gfill(gr)}),
+      op("="), res(fmt(cur - S.lr*gr)),
+    ]);
+    for(let i=0;i<S.nin;i++) out.push(upd(`w${SUB[i]}`, S.w[i], GRAD.w[i], i));
+    out.push(upd("b", S.b, GRAD.b, 1));
   }
 
   el("readout").innerHTML = out.join("");
 }
 
+/* ---------- the chain rule, large, on top of the diagram ----------
+   Always the same three factors in the same order. Each stays greyed until the
+   backward pass has actually produced it, so stepping fills the product in from
+   the left — which is the order the gradient is multiplied in.
+   ----------------------------------------------------------------- */
+function renderChainBar(){
+  const P = palette(), A = ACT[S.act], s = selInfo(), p = S.phase;
+  const F = [
+    {at:PH.ga, chip:"dLda", sym:"∂L/∂a", rule:"2(a − t)",
+     num:fmtg(G.a.g),     fill:gramp(G.a.g, P, 0.06, 0.34)},
+    {at:PH.gz, chip:"dadz", sym:"∂a/∂z", rule:A.der,
+     num:fmtg(G.a.local), fill:gramp(G.a.local, P, 0.06, 0.34)},
+    {at:PH.gw, chip:"dzdp", sym:`∂z/∂${s.name}`, rule:s.localTxt, val:true,
+     num:fmt(s.local),    fill:ramp(s.local, S.sel.k === "w" ? XMAX : WMAX, P, 0.06, 0.34)},
+  ];
+
+  const html = [`<span class="lhs">∂L/∂${s.name}</span><span class="dot">=</span>`];
+  F.forEach((f, i) => {
+    if(i) html.push(`<span class="dot">·</span>`);
+    const done = p >= f.at && !diverged();
+    const cls = ["cbf", f.val ? "val" : "", done ? "" : "off",
+                 p === f.at ? "now" : "", S.chip === f.chip ? "lit" : ""].filter(Boolean).join(" ");
+    html.push(`<span class="${cls}" data-chip="${f.chip}"${done ? ` style="background:${f.fill}"` : ""}>` +
+              `<b>${f.sym}</b><i>${f.rule}</i><u>${done ? f.num : "?"}</u></span>`);
+  });
+  html.push(`<span class="dot">=</span>`,
+            `<span class="out">${p >= PH.gw && !diverged() ? fmtg(s.node.g) : "?"}</span>`);
+  el("chainbar").innerHTML = html.join("");
+}
+
 function markChips(){
   el("readout").querySelectorAll("[data-chip]").forEach(n =>
     n.classList.toggle("on", !!S.chip && n.dataset.chip === S.chip));
-}
-
-/* ============================== side panels ============================== */
-function renderFormula(){
-  const A = ACT[S.act], n = S.nin;
-  el("formula").innerHTML =
-    `<span class="lbl">pytorch</span>nn.Linear(${n}, 1)${S.act === "linear" ? "" : " → " + S.act}
-     <span class="lbl">then</span>nn.MSELoss()
-     <span class="lbl">forward</span>z = Σ <span class="wv">wᵢ</span>·<span class="fv">xᵢ</span> + <span class="wv">b</span>
-     a = ${A.call}
-     L = mean over the batch of (a − t)²
-     <span class="lbl">batch</span><span class="big">${S.data.length}</span> points, all of them, every step
-     <span class="lbl">parameters</span><span class="big">${n + 1}</span> — ${n} weight${n === 1 ? "" : "s"} + 1 bias
-     <span class="lbl">gradients</span><span class="big">${n + 1}</span> — one per parameter, same shapes`;
-
-  el("shapenote").innerHTML =
-    `Every point gets its own forward <em>and</em> backward pass; the ${n + 1} gradients that come back are
-     averaged, and that average is the single step the parameters take. Backprop costs about one multiply-add
-     per parameter in each direction, which is why training is roughly three forward passes' worth of work.`;
-}
-
-function renderChain(){
-  const A = ACT[S.act], s = selInfo();
-  el("chain").innerHTML =
-    `<span class="lbl">the two local pieces</span>
-     <span class="gv">∂L/∂a</span> = 2(a − t)
-     <span class="gv">∂a/∂z</span> = ${A.der}
-     <span class="lbl">every parameter</span>
-     ∂L/∂wᵢ = <span class="gv">∂L/∂a</span> · <span class="gv">∂a/∂z</span> · <span class="fv">xᵢ</span>
-     ∂L/∂b &nbsp;= <span class="gv">∂L/∂a</span> · <span class="gv">∂a/∂z</span>
-     <span class="lbl">handed to the layer below</span>
-     ∂L/∂xᵢ = <span class="gv">∂L/∂a</span> · <span class="gv">∂a/∂z</span> · <span class="wv">wᵢ</span>
-     <span class="lbl">update</span>
-     w ← w − <b>η</b> · ∂L/∂w &nbsp;<span style="color:var(--dim2)">η = ${S.lr}</span>
-     <span class="lbl">point ${S.sample + 1} — ∂L/∂${s.name}</span>
-     ${gv(G.a.g)} · ${gv(G.a.local)} · ${fv(s.local)} = <span class="big gv">${fmtg(s.node.g)}</span>
-     ${s.batch === null ? "" :
-       `<span class="lbl">averaged over all ${S.data.length}</span>
-        <span class="big gv">${fmtg(s.batch)}</span>`}`;
-}
-
-function renderDiag(){
-  const {rows, worst} = gradCheck();
-  const ok = worst < 1e-4;
-  const out = [];
-
-  out.push(`<div style="margin-bottom:8px">
-    <span class="flag ${ok ? "ok" : "bad"}">gradient check ${ok ? "ok" : "off"}</span>
-    <span style="color:var(--dim);font-size:11.5px;margin-left:7px">worst relative error
-      ${worst === 0 ? "0" : worst.toExponential(1)}</span></div>`);
-
-  out.push(`<table class="stats">
-    <tr><th>parameter</th><th>engine</th><th>(L(p+h)−L(p−h))/2h</th></tr>
-    ${rows.map(r => `<tr><td>${r.name}</td><td>${fmtg(r.engine)}</td><td>${fmtg(r.num)}</td></tr>`).join("")}
-    </table>`);
-
-  const notes = [`The right column never touches the graph — it nudges each parameter by h = 1e-4 and
-                  re-runs the whole batch twice. If the engine and the difference quotient ever disagreed,
-                  every number on this page would be a lie.`];
-
-  const slopes = GS.map(g => Math.abs(g.a.local));
-  const maxSlope = Math.max(...slopes, 0);
-
-  if(S.act === "relu" && GS.some(g => Math.abs(g.z.d) < 1e-6))
-    notes.push(`<span class="err">Some point has z = 0 exactly.</span> relu has no derivative there — the
-                engine takes the subgradient 0, the difference quotient straddles the kink. Both are
-                defensible; nudge a weight and it goes away.`);
-
-  if(maxSlope < 1e-3 && S.act !== "linear")
-    notes.push(`<b>∂a/∂z ≈ 0 at every point.</b> ${S.act === "relu"
-      ? `z is negative everywhere, so relu outputs 0 and blocks the gradient completely. Every gradient is
-         exactly 0 and training does <em>nothing</em> — a dead ReLU. Look at the fit: the curve is flat on
-         the floor and the error bars are at full intensity, yet nothing moves.`
-      : `The activation is saturated on every point — the violet tangent inside the neuron is flat. Each
-         gradient gets multiplied by that, so the weights barely move however wrong the fit is. This is the
-         vanishing gradient, in one layer.`}`);
-  else if(maxSlope < 0.05 && S.act !== "linear")
-    notes.push(`The steepest ∂a/∂z in the batch is only ${fmtg(maxSlope)}. Whatever the loss wants, the
-                weights get a fraction of it — and the bars on the fit shrink very slowly as a result.`);
-
-  if(diverged())
-    notes.push(`<span class="err">The loss has blown up.</span> η = ${S.lr} takes steps larger than the
-                bowl is wide, so each one lands further out than the last. Gradient descent only converges
-                when η is below 2/curvature.`);
-  else if(S.steps > 0 && LOSS < 1e-5)
-    notes.push(`Converged: L = ${LOSS.toExponential(1)}. The error bars have faded to nothing and the
-                gradients with them, so the updates have nothing left to do.`);
-
-  if(S.act === "linear")
-    notes.push(`With a linear activation this is least squares: the loss surface is a single bowl, so there
-                is exactly one minimum and gradient descent always finds it.`);
-
-  out.push(`<div class="note">${notes.join("<br><br>")}</div>`);
-  el("diag").innerHTML = out.join("");
+  renderChainBar();
 }
 
 /* ============================== controls ============================== */
@@ -1319,9 +1326,15 @@ const CAPS = {
       line through the mark is ∂a/∂z — flat means the gradient dies here, steep means it passes through.`,
   L: `<b>The loss.</b> The bowl is (a − t)² as a would move; the mark is where this point sits on it. Its
       violet tangent is 2(a − t), the first number the backward pass produces.`,
-  g: `<b>The backward pass</b>, station for station under the forward one. Each violet card is one
-      multiplication by a local derivative. Point at a wire and the dashed line shows which forward value
-      its gradient reuses — that is why activations have to be kept.`,
+  ga:`<b>The backward pass starts.</b> ∂L/∂L is 1 by definition, and the first real derivative is the slope
+      of the bowl at this point: 2(a − t). It is the leftmost factor of the chain rule above — watch that
+      factor come out of grey.`,
+  gz:`<b>One factor further.</b> The gradient crosses the neuron by being multiplied by ∂a/∂z, the violet
+      tangent drawn inside the activation card. That single multiply is where a saturated unit kills
+      learning: multiply by a flat slope and there is nothing left.`,
+  gw:`<b>Onto the parameters.</b> The last factor is just ∂z/∂w = x, so every weight gets ∂L/∂z times its own
+      input. Point at a wire and the dashed line shows which forward value its gradient reuses — that is why
+      activations have to be kept.`,
   u: `<b>The update.</b> The gradients above are for this one point; the step uses their mean over all of
       them. Press ▶ to apply it — the curve moves and one point lands on the loss plot.`,
 };
@@ -1339,7 +1352,7 @@ function buildControls(){
     `<button data-set="${k}"><b>${d.name}</b><i>${d.note}</i></button>`).join("");
 
   el("rail").innerHTML = PHASES.map((p, i) =>
-    `<button data-phase="${i}"><b>${i + 1} · ${p.lbl}</b><i id="bp_eq${i}"></i></button>`).join("");
+    `<button data-phase="${i}"><b>${i + 1}) ${p.lbl}</b><i id="bp_eq${i}"></i></button>`).join("");
 
   el("wctrls").innerHTML =
     slider("w0", "w₁", "wv", -4, 4, 0.05) +
@@ -1372,7 +1385,7 @@ function buildControls(){
 function pick(i){
   S.sample = i;
   G = GS[i];
-  renderMath(); renderChain(); paint(); paintFit(); syncControls();
+  renderMath(); renderChainBar(); paint(); paintFit(); syncControls();
 }
 
 function step(){
@@ -1419,8 +1432,10 @@ function syncControls(){
   el("trainhint").innerHTML = diverged()
     ? `<span class="err">Diverged — reset before training further.</span>`
     : `Runs 50 full passes over all ${S.data.length} points.`;
+  // what this dataset is and why it is worth fitting — it belongs beside the
+  // button that picks it, not under the plots
   el("setnote").innerHTML = `<b>${S.data.length}</b> points, <b>${S.nin}</b> input${S.nin === 1 ? "" : "s"}
-    — the neuron is fitted to all of them at once.`;
+    — the neuron is fitted to all of them at once.<br><br>${SETS[S.set].why}`;
 }
 
 /* ============================== interaction ============================== */
@@ -1443,11 +1458,11 @@ function hit(ev){
   if(inBox(LY.ax, LY.act, FY, FH))  return {part:"act",  sel:null};
   if(inBox(LY.lx, LY.loss, FY, FH)) return {part:"loss", sel:null};
 
-  if(S.phase >= 3){
+  {
     const B = backBoxes();
-    if(inBox(B.a.x, B.a.w, BY, LY.bh)) return {part:"ga", sel:null};
-    if(inBox(B.z.x, B.z.w, BY, LY.bh)) return {part:"gz", sel:null};
-    if(inBox(B.p.x, B.p.w, BY, LY.bh)){
+    if(S.phase >= PH.ga && inBox(B.a.x, B.a.w, BY, LY.bh)) return {part:"ga", sel:null};
+    if(S.phase >= PH.gz && inBox(B.z.x, B.z.w, BY, LY.bh)) return {part:"gz", sel:null};
+    if(S.phase >= PH.gw && inBox(B.p.x, B.p.w, BY, LY.bh)){
       const i = Math.floor((y - BY - 26)/ROWH);
       if(i >= 0 && i < S.nin)   return {part:"gw" + i, sel:{k:"w", i}};
       if(i === S.nin)           return {part:"gb", sel:{k:"b"}};
@@ -1495,7 +1510,7 @@ function wire(){
     cv.style.cursor = h && h.drag ? "ns-resize" : "default";
     if(part === S.hover && sel.k === S.sel.k && sel.i === S.sel.i) return;
     S.hover = part; S.sel = sel;
-    renderMath(); renderChain(); paint();
+    renderMath(); renderChainBar(); paint();
   });
   cv.addEventListener("mousedown", e => {
     const h = hit(e);
@@ -1517,15 +1532,18 @@ function wire(){
     if(i >= 0 && i !== S.sample) pick(i);
   });
 
-  el("readout").addEventListener("mouseover", e => {
-    const t = e.target.closest("[data-chip]");
-    const id = t ? t.dataset.chip : "";
-    if(id === S.chip) return;
-    S.chip = id; markChips(); paint();
-  });
-  el("readout").addEventListener("mouseleave", () => {
-    if(!S.chip) return;
-    S.chip = ""; markChips(); paint();
+  // the sheet and the big chain rule light the same paths on the canvas
+  ["readout", "chainbar"].forEach(id => {
+    el(id).addEventListener("mouseover", e => {
+      const t = e.target.closest("[data-chip]");
+      const c = t ? t.dataset.chip : "";
+      if(c === S.chip) return;
+      S.chip = c; markChips(); paint();
+    });
+    el(id).addEventListener("mouseleave", () => {
+      if(!S.chip) return;
+      S.chip = ""; markChips(); paint();
+    });
   });
 
   addEventListener("keydown", e => {
@@ -1552,13 +1570,13 @@ const hidden = () => document.getElementById("view-backprop").classList.contains
 let raf = 0, frame = 0;
 function tick(){
   raf = 0;
-  if(hidden() || S.phase < 3) return;
+  if(hidden() || S.phase < PH.ga) return;
   frame++;
   paint();
   raf = requestAnimationFrame(tick);
 }
 function animate(){
-  if(!raf && S.phase >= 3 && !hidden()) raf = requestAnimationFrame(tick);
+  if(!raf && S.phase >= PH.ga && !hidden()) raf = requestAnimationFrame(tick);
 }
 
 /* ================================ main ================================ */
@@ -1569,9 +1587,7 @@ function refresh(){
   if(S.playing && diverged()) stop();
   syncControls();
   renderMath();
-  renderFormula();
-  renderChain();
-  renderDiag();
+  renderChainBar();
   paint();
   paintFit();
   animate();

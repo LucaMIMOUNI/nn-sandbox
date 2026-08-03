@@ -287,18 +287,26 @@
 <div class="hero">
   <h1>Backprop, one derivative at a time</h1>
   <p class="sub">
-    One neuron fitted to a handful of points. The <b>forward pass</b> runs left to right along the top —
-    each station carries its own equation with this point's numbers already substituted in, and is filled
-    with the colour of the number it holds: <b>strong when it is large, faded as it approaches zero</b>.
-    The <b>backward pass</b> runs right to left directly underneath, station for station, so every
-    <span class="gv">gradient</span> sits below the <span class="fv">value</span> it came from. Inside the
-    neuron and the loss, the derivative being multiplied is drawn as a <span class="gv">tangent line</span> —
-    flat means the gradient dies there. <b>Drag a wire</b> to change its weight, or
-    <b>press play</b> and watch the curve settle onto the points as the error bars shrink.
+    One neuron fitted to a handful of points, in <b>seven steps</b>. The <b>forward pass</b> runs left to
+    right along the top; the <b>backward pass</b> runs right to left directly underneath, one
+    multiplication per step, so every <span class="gv">gradient</span> sits below the
+    <span class="fv">value</span> it came from. Every number is tinted by its own size — <b>strong when it
+    is large, faded as it approaches zero</b> — and each derivative being multiplied is drawn as a
+    <span class="gv">tangent line</span>, flat meaning the gradient dies there. <b>Drag a wire</b> to
+    change its weight, or <b>press play</b> and watch the fit on the right settle onto the points: a dot is
+    where a point should be, the line is the neuron, and the bar between them is that point's error.
   </p>
+
+  <div class="legend">
+    <span><span class="ramp"></span></span>
+    <span>negative &#8594; zero &#8594; positive, and how strongly</span>
+    <span><span class="sw" style="background:var(--violet)"></span>gradients, and the tangents they are read off</span>
+    <span>in the maths: <span class="fv">a value</span>, <span class="wv">a parameter</span>,
+      <span class="gv">a gradient</span> — every term carries the colour its number has on the canvas</span>
+  </div>
 </div>
 
-<div class="app">
+<div class="app plots">
 
   <!-- ============ LEFT: the problem ============ -->
   <div class="col-left side">
@@ -351,50 +359,27 @@
         <span class="hint" id="bp_stephint" style="margin:0"></span>
       </div>
 
+      <div class="chainbar" id="bp_chainbar"></div>
+
       <div id="bp_vizwrap"><canvas id="bp_viz"></canvas></div>
       <div class="hint" id="bp_vizcap" style="margin-top:7px;min-height:32px;line-height:1.5"></div>
 
       <div id="bp_readout"></div>
-
-      <div class="legend">
-        <span><span class="ramp"></span></span>
-        <span>negative &#8594; zero &#8594; positive, and how strongly</span>
-        <span><span class="sw" style="background:var(--violet)"></span>gradients, and the tangents they are read off</span>
-      </div>
-      <div class="legend" style="margin-top:3px">
-        <span>in the maths: <span class="fv">a value</span>, <span class="wv">a parameter</span>,
-          <span class="gv">a gradient</span> — each chip carries the colour its number has on the canvas</span>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>The fit, and the loss it produces</h2>
-      <div id="bp_fitwrap"><canvas id="bp_fit"></canvas></div>
-      <div class="stepbar" style="margin-top:6px">
-        <button id="bp_sprev" title="previous point">&#9664;</button>
-        <span id="bp_slabel" class="mono" style="min-width:104px;text-align:center"></span>
-        <button id="bp_snext" title="next point">&#9654;</button>
-        <label class="chk"><input type="checkbox" id="bp_trails"> tails</label>
-        <span class="hint" style="margin:0">hover a point on the plot and the diagram above fills with it</span>
-      </div>
-      <div class="note" id="bp_fitnote"></div>
     </div>
   </div>
 
-  <!-- ============ RIGHT: shape, chain rule, diagnostics ============ -->
+  <!-- ============ RIGHT: the fit, and the loss under it ============ -->
   <div class="col-right side">
     <div class="panel">
-      <h2>Shape &amp; cost</h2>
-      <div class="formula" id="bp_formula"></div>
-      <div class="note" id="bp_shapenote"></div>
-    </div>
-    <div class="panel">
-      <h2>Chain rule</h2>
-      <div class="formula" id="bp_chain"></div>
-    </div>
-    <div class="panel">
-      <h2>Diagnostics</h2>
-      <div id="bp_diag"></div>
+      <div id="bp_fitwrap"><canvas id="bp_fit"></canvas></div>
+      <div class="stepbar" style="margin-top:4px">
+        <button id="bp_sprev" title="previous point">&#9664;</button>
+        <span id="bp_slabel" class="mono" style="flex:1;text-align:center"></span>
+        <button id="bp_snext" title="next point">&#9654;</button>
+        <label class="chk"><input type="checkbox" id="bp_trails"> tail</label>
+      </div>
+      <div class="hint" style="margin-top:6px">Hover a point and the diagram fills with it.</div>
+      <div class="note" id="bp_fitnote"></div>
     </div>
   </div>
 

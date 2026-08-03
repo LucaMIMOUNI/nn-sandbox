@@ -43,9 +43,12 @@
     display:grid;grid-template-columns:262px minmax(0,1fr) 290px;
     gap:16px;align-items:start;
   }
+  /* the backprop page trades the text column on the right for the two plots,
+     which need a little more room and stay in view while the pass runs */
+  .app.plots{grid-template-columns:262px minmax(0,1fr) 318px}
   .side{position:sticky;top:16px;max-height:calc(100vh - 32px);overflow-y:auto;overscroll-behavior:contain}
   @media (max-width:900px){
-    .app{grid-template-columns:minmax(0,1fr)}
+    .app,.app.plots{grid-template-columns:minmax(0,1fr)}
     .side{position:static;max-height:none;overflow:visible}
     .col-mid{order:1} .col-left{order:2} .col-right{order:3}
   }
@@ -115,6 +118,40 @@
   .rail button.on{background:color-mix(in srgb,var(--accent) 16%,transparent);
                   border-color:var(--accent);color:var(--accent)}
   .rail button.on i{color:var(--accent);opacity:.75}
+  /* the chain rule, written once and large, directly above the diagram. Each
+     factor stays greyed until the backward pass has actually reached it. */
+  .chainbar{display:flex;align-items:stretch;gap:4px;flex-wrap:wrap;margin:0 0 10px;
+            padding:8px 11px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);
+            font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .chainbar .lhs,.chainbar .dot{display:flex;align-items:center;color:var(--dim);padding:0 3px}
+  .chainbar .lhs{font-size:16px;font-weight:700;color:var(--fg)}
+  .chainbar .dot{font-size:15px;color:var(--dim2)}
+  .cbf{min-width:92px;padding:3px 9px 4px;border-radius:6px;text-align:center;
+       border:1px solid transparent}
+  .cbf b{display:block;font-size:14.5px;font-weight:700;color:var(--violet)}
+  .cbf i{display:block;font-style:normal;font-size:9.5px;color:var(--dim2);margin-top:1px}
+  .cbf u{display:block;text-decoration:none;font-size:14px;font-weight:700;color:var(--fg);margin-top:2px}
+  .cbf.val b{color:var(--accent2)}
+  .cbf.off{opacity:.3}
+  .cbf.off u{color:var(--dim2)}
+  .cbf.now{border-color:var(--violet)}
+  .cbf.lit{box-shadow:0 0 0 2px var(--accent2)}   /* inline tint wins on background */
+  .cbf{cursor:default}
+  .chainbar .out{display:flex;align-items:center;font-size:17px;font-weight:700;color:var(--fg);
+                 padding-left:3px}
+  /* the maths sheet: the equation above never changes, only the numbers hung
+     under each of its terms do */
+  .eq{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:baseline;
+      font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .tt{display:inline-flex;flex-direction:column;align-items:center;padding:1px 3px;border-radius:4px}
+  .tt b{font-size:12.5px;font-weight:600;color:var(--dim);white-space:nowrap}
+  .tt u{display:flex;flex-direction:column;align-items:center;text-decoration:none;
+        font-size:11px;font-weight:700;color:var(--fg);white-space:nowrap}
+  .tt u:empty{display:none}
+  .tt u::before{content:"";width:1px;height:5px;background:var(--line);margin:1px 0}
+  .tt.op b{color:var(--dim2);font-weight:400}
+  .tt.hd b{color:var(--fg);font-weight:700}
+  .tt.on{background:color-mix(in srgb,var(--accent2) 30%,transparent)}
   #readout,#bn_readout,#bp_readout{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:var(--dim);
            min-height:34px;margin-top:10px;padding:11px 12px 9px;border-top:1px solid var(--line);
            background:var(--panel2);border-radius:0 0 8px 8px}
@@ -123,6 +160,7 @@
   .mrow.now{background:color-mix(in srgb,var(--accent) 10%,transparent);border-radius:5px}
   .mlbl{flex:none;width:76px;text-align:right;font-size:10px;text-transform:uppercase;
         letter-spacing:.07em;color:var(--dim2);font-family:ui-sans-serif,system-ui}
+  .mlbl.raw{text-transform:none;font-family:ui-monospace,Menlo,monospace;font-size:10.5px}
   .mval{flex:1;min-width:0;line-height:1.75;word-break:break-word}
   .iv{color:var(--accent2);font-weight:700}       /* input values   */
   .wv{color:var(--accent);font-weight:700}        /* kernel weights */
